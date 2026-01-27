@@ -1,0 +1,10 @@
+{
+	"Id": "PhysxSimulationRework",
+	"Version": "1.00.0",
+	"DisplayName": "PhysX SimulationRework",
+	"Author": "CJ187",
+	"Credits": "Coookie, NotAnOption and ChatGPT",
+	"EntryMethod": "PhysxSimulationRework.Main.Load",
+	"ManagerVersion": "0.27.2",
+	"HomePage": "https://www.nexusmods.com/derailvalley/mods/1153"
+}
