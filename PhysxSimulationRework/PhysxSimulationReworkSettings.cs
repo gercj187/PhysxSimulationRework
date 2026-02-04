@@ -146,35 +146,47 @@ namespace PhysxSimulationRework
 					wordWrap = true
 				};
 				// --- Entgleisung ---
-				Label($"Chance on Derailment: {Mathf.RoundToInt(chanceToBreakOnDerail * 100)}%");
-				chanceToBreakOnDerail = HorizontalSlider(chanceToBreakOnDerail, 0f, 1f,Width(500));
-				GUILayout.Label("<i>(Adjusts the probability that couplers will fail when a vehicle derails.)</i>",italicStyle);
+				string derailLabel = chanceToBreakOnDerail <= 0f
+					? "Chance on Derailment: (Disabled)"
+					: $"Chance on Derailment: {Mathf.RoundToInt(chanceToBreakOnDerail * 100)}%";
+				Label(derailLabel);
+				chanceToBreakOnDerail = HorizontalSlider(chanceToBreakOnDerail, 0f, 1f, Width(500));
+				if (chanceToBreakOnDerail > 0f)
+				{
+					GUILayout.Label("<i>(Adjusts the probability that couplers will fail when a vehicle derails.)</i>", italicStyle);
+				}
 				Space(5);
 				// --- Überlast (Lose) ---
-				Label($"Stress Failure Chance: {Mathf.RoundToInt(chanceToBreakOnStress * 100)}%");
-				chanceToBreakOnStress = HorizontalSlider(chanceToBreakOnStress, 0f, 1f,Width(500));
-				GUILayout.Label("<i>(Adjusts the chance of coupler failure when excessive tensile force is applied.)</i>",italicStyle);
-				Space(5);
-				// --- Bruchkraft (GUI in kN, intern in N) ---
-				float breakForce_kN = customBreakForce / 1000f;
+				string stressLabel = chanceToBreakOnStress <= 0f
+					? "Stress Failure Chance: (Disabled)"
+					: $"Stress Failure Chance: {Mathf.RoundToInt(chanceToBreakOnStress * 100)}%";
 
-				Label($"Tensile Force Limit: {breakForce_kN:0} kN");
-				breakForce_kN = HorizontalSlider(
-					breakForce_kN,
-					1f,
-					1500f,
-					Width(500)
-				);
-				GUILayout.Label("<i>(Defines the tensile force limit at which a coupler may fail under excessive load.)</i>",italicStyle);
-				GUILayout.Label("<i>(Increasing this value makes couplers more resistant to failure.)</i>",italicStyle);
-
-				// Rückrechnung: kN → N
-				customBreakForce = breakForce_kN * 1000f;
-
-				// --- Preset ---
-				if (Button("Restore Default Break Force (1000 kN)", Width(333)))
+				Label(stressLabel);
+				chanceToBreakOnStress = HorizontalSlider(chanceToBreakOnStress, 0f, 1f, Width(500));
+				if (chanceToBreakOnStress > 0f)
 				{
-					customBreakForce = 1000000f; // intern N
+					GUILayout.Label("<i>(Adjusts the chance of coupler failure when excessive tensile force is applied.)</i>", italicStyle);
+					Space(5);
+					// --- Bruchkraft (GUI in kN, intern in N) ---
+					float breakForce_kN = customBreakForce / 1000f;
+
+					Label($"Tensile Force Limit: {breakForce_kN:0} kN");
+					breakForce_kN = HorizontalSlider(
+						breakForce_kN,
+						1f,
+						1500f,
+						Width(500)
+					);
+					GUILayout.Label("<i>(Defines the tensile force limit at which a coupler may fail under excessive load.)</i>", italicStyle);
+					GUILayout.Label("<i>(Increasing this value makes couplers more resistant to failure.)</i>", italicStyle);
+					Space(5);
+					// Rückrechnung: kN → N
+					customBreakForce = breakForce_kN * 1000f;
+
+					if (Button("Restore Default Break Force (1000 kN)", Width(500)))
+					{
+						customBreakForce = 1000000f;
+					}
 				}
 			}     
             Space(5);
@@ -189,7 +201,7 @@ namespace PhysxSimulationRework
 			{
 				GUI.color = Color.green;
 			}
-			if (GUILayout.Button(label, GUILayout.Width(125)))
+			if (GUILayout.Button(label, GUILayout.Width(122)))
 			{
 				turntableRotationSpeedMultiplier = value;
 			}
@@ -207,7 +219,7 @@ namespace PhysxSimulationRework
 			if (isActive)
 				GUI.color = Color.green;
 
-			if (GUILayout.Button(label, GUILayout.Width(250)))
+			if (GUILayout.Button(label, GUILayout.Width(249)))
 			{
 				if (turntableWarningSound != value)
 				{

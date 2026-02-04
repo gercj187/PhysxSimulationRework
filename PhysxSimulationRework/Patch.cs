@@ -9,6 +9,7 @@ using DV.Simulation;
 using DV.Simulation.Brake;
 using DV.CabControls;
 using DV.Simulation.Cars;
+using DV.VFX;
 
 namespace PhysxSimulationRework
 {
@@ -57,21 +58,12 @@ namespace PhysxSimulationRework
 		private static readonly MethodInfo _updateSnappingRangeSound =
 			AccessTools.Method(typeof(TurntableController), "UpdateSnappingRangeSound", new[] { typeof(float) });
 			
-		// Merkt den kleinsten Brake-Faktor wÃ¤hrend eines Snaps
 		private static readonly Dictionary<TurntableController, float> _snapBrakeClamp = new();
 		
-		// Merkt, ob die letzte Bewegung durch PUSHEN kam
 		private static readonly HashSet<TurntableController> _lastWasPush = new();
 
-		// -----------------------------
-		// Original speedMultiplier Cache
-		// -----------------------------
 		private static readonly Dictionary<TurntableController, float> _origSpeedMult = new();
 
-		// -----------------------------
-		// Drehrichtung merken (pro Controller)
-		// +1 = Uhrzeigersinn, -1 = gegen Uhrzeigersinn
-		// -----------------------------
 		private static readonly Dictionary<TurntableController, int> _lastDriveDir = new();
 		
 		// -----------------------------
@@ -115,7 +107,7 @@ namespace PhysxSimulationRework
 			var selected = GetSelectedBell();
 
 			// =====================================================
-			// 1) CLASSIC BELL → LampControl (wie früher)
+			// CLASSIC BELL
 			// =====================================================
 			if (selected == TurntableWarningSound.DashWarningBell)
 			{
@@ -140,7 +132,7 @@ namespace PhysxSimulationRework
 			}
 
 			// =====================================================
-			// 2) DH4 HORN → AudioSource (laut Logger!)
+			// DH4 HORN
 			// =====================================================
 			if (selected == TurntableWarningSound.TrainBell_DH4)
 			{
@@ -160,7 +152,6 @@ namespace PhysxSimulationRework
 					}
 				}
 
-				// 🔁 Fallback (wichtig!)
 				ModLog.Turntable("DH4 horn not available → fallback to DashWarning");
 				_bellLoadAttempted = false;
 				if (Main.Settings != null)
@@ -187,26 +178,16 @@ namespace PhysxSimulationRework
 			src = go.AddComponent<AudioSource>();
 			src.clip = _bellClip;
 
-			// -----------------------------
-			// Lautstärke bewusst differenziert
-			// -----------------------------
 			bool isBell =
 				Main.Settings?.turntableWarningSound == TurntableWarningSound.DashWarningBell;
 
 			src.volume = isBell ? 3.0f : 1.0f;
 			src.pitch = 1f;
-
-			// -----------------------------
-			// Räumlichkeit
-			// -----------------------------
 			src.spatialBlend = 1f;
 			src.minDistance = isBell ? 3f : 1f;
 			src.maxDistance = isBell ? 80f : 150f;
 			src.rolloffMode = AudioRolloffMode.Logarithmic;
 
-			// -----------------------------
-			// Mixer NUR fürs Horn
-			// -----------------------------
 			if (_bellMixer != null && !isBell)
 			{
 				src.outputAudioMixerGroup = _bellMixer;
@@ -314,16 +295,10 @@ namespace PhysxSimulationRework
 			}
 		}
 		
-		// -----------------------------
-		// Patch Targets
-		// -----------------------------
 		[HarmonyTargetMethod]
 		private static MethodBase TargetMethod()
 			=> AccessTools.Method(typeof(TurntableController), "FixedUpdate");
 
-		// -----------------------------
-		// FixedUpdate ersetzen (nur wenn setting aktiv)
-		// -----------------------------
 		[HarmonyPrefix]
 		private static bool FixedUpdate_Prefix(TurntableController __instance)
 		{
@@ -336,7 +311,6 @@ namespace PhysxSimulationRework
 
 			CacheAndApplySpeedMultiplier(__instance);
 
-			// Vanilla-Guards
 			if (!WorldStreamingInit.IsLoaded)
 				return false;
 
@@ -344,18 +318,15 @@ namespace PhysxSimulationRework
 			if (turntable == null)
 				return false;
 
-			// leverControl ggf. noch null (Start())
 			var lever = _leverControl(__instance);
 			if (lever == null)
 				return false;
 
 			float value = (__instance.PlayerControlAllowed ? lever.Value : 0.5f);
 
-			// Push-Overrides (Vanilla)
 			float pushPos = _pushingPositiveDirectionValue(__instance);
 			float pushNeg = _pushingNegativeDirectionValue(__instance);
 
-			// ---- Positive drehen (Uhrzeigersinn) ----
 			float posInput = (pushPos != 0f) ? pushPos : Mathf.InverseLerp(0.55f, 1f, value);
 			if (posInput > 0f)
 			{
@@ -379,7 +350,6 @@ namespace PhysxSimulationRework
 				return false;
 			}
 
-			// ---- Negative drehen (gegen Uhrzeigersinn) ----
 			float negInput = (pushNeg != 0f) ? pushNeg : Mathf.InverseLerp(0.45f, 0f, value);
 			if (negInput > 0f)
 			{
@@ -403,7 +373,6 @@ namespace PhysxSimulationRework
 				return false;
 			}
 
-			// ---- Hebel losgelassen: Snap-Phase ----
 			if (!_snappingAngleSet(__instance))
 			{
 				if (_lastWasPush.Remove(__instance))
@@ -416,7 +385,7 @@ namespace PhysxSimulationRework
 						return false;
 					}
 				}
-				// statt Vanilla ClosestSnappingAngle() (3Â° hardcoded) nutzen wir unsere Logik
+				
 				int dir = _lastDriveDir.TryGetValue(__instance, out int d) ? d : 0;
 
 				float tolerance = Mathf.Clamp(settings.snapAngleToleranceDeg, 0.0f, 180f);
@@ -425,7 +394,7 @@ namespace PhysxSimulationRework
 				{
 					_snappingAngle(__instance) = -1f;
 					_snappingAngleSet(__instance) = true;
-					return false; // Vanilla FixedUpdate Ã¼berspringen
+					return false;
 				}
 				
 				float foundAngle;
@@ -439,7 +408,6 @@ namespace PhysxSimulationRework
 				}
 				else
 				{
-					// Wichtig: NICHT zurÃ¼ckfahren, NICHT auto-snappen
 					_snappingAngle(__instance) = -1f;
 				}
 
@@ -447,14 +415,12 @@ namespace PhysxSimulationRework
 				_snapBrakeClamp[__instance] = 1f;
 			}
 
-			// ---- Wenn ein Snap-Ziel gesetzt ist: Vanilla Snap-Approach nachbauen ----
 			float snapAngle = _snappingAngle(__instance);
 			if (snapAngle >= 0f)
 			{
 				float currentY = turntable.currentYRotation;
 				float angleA = TurntableRailTrack.AngleRange0To360(currentY + 180f);
 
-				// Nur solange wir uns wirklich bewegen
 				if (!TurntableRailTrack.AnglesEqual(currentY, snapAngle) && !TurntableRailTrack.AnglesEqual(angleA, snapAngle))
 				{
 					float num6 = TurntableRailTrack.AngleRangeNeg180To180(snapAngle - turntable.targetYRotation);
@@ -463,16 +429,13 @@ namespace PhysxSimulationRework
 
 					float snapDir = _snappingDirection(__instance);
 
-					// Basis-Snap-Speed aus Settings
 					float rotationMult = Main.Settings?.turntableRotationSpeedMultiplier ?? 1f;
 					float snapMult = Mathf.Max(0.1f, rotationMult - 0.1f);
 
 					float snapSpeed = 10f * snapMult;
 
-					// Restwinkel zum Ziel
 					float remainingDeg = Mathf.Abs(f3);
 
-					// ðŸ›‘ Bremszonen (deutlich spÃ¼rbar)
 					float brakeFactorTarget = 1f;
 
 					if (remainingDeg <= 5f) brakeFactorTarget = 0.80f;
@@ -484,7 +447,6 @@ namespace PhysxSimulationRework
 					if (remainingDeg <= 0.7f) brakeFactorTarget = 0.15f;
 					if (remainingDeg <= 0.4f) brakeFactorTarget = 0.05f;
 
-					// ðŸ”’ Clamp: nie wieder schneller werden
 					float brakeFactor = brakeFactorTarget;
 
 					if (_snapBrakeClamp.TryGetValue(__instance, out float prev))
@@ -494,16 +456,12 @@ namespace PhysxSimulationRework
 
 					_snapBrakeClamp[__instance] = brakeFactor;
 
-					// Effektive Schrittweite
 					float maxStep = snapSpeed * brakeFactor * Time.fixedDeltaTime;
 
-					// TatsÃ¤chliche Bewegung
 					float num8 = snapDir * Mathf.Min(remainingDeg, maxStep);
 
-					// Bewegungssound
 					_rotationSoundIntensity(__instance) = Mathf.Max( _rotationSoundIntensity(__instance), 0.25f);
 					
-					// Bewegung anwenden
 					turntable.targetYRotation = TurntableRailTrack.AngleRange0To360( turntable.targetYRotation + num8);
 
 					turntable.RotateToTargetRotation();
@@ -512,7 +470,6 @@ namespace PhysxSimulationRework
 				}
 				else
 				{
-					// Snapped!
 					_playTrackConnectedSound(__instance) = true;
 					_snappingAngle(__instance) = -1f;
 					
@@ -523,7 +480,6 @@ namespace PhysxSimulationRework
 			return false;
 		}
 
-		// Eigene Zielfindung: NUR in Drehrichtung + innerhalb Toleranz
 		private static bool TryFindSnappingAngleDirectional(
 			TurntableRailTrack tt,
 			int direction,
@@ -551,19 +507,16 @@ namespace PhysxSimulationRework
 			{
 				float teAngle = tt.trackEnds[i].angle;
 
-				// Vanilla: min(|deltaFront|, |deltaRear|)
 				float deltaFront = TurntableRailTrack.AngleRangeNeg180To180(teAngle - front);
 				float deltaRear = TurntableRailTrack.AngleRangeNeg180To180(teAngle - rear);
 
 				float signed = (Mathf.Abs(deltaRear) <= Mathf.Abs(deltaFront)) ? deltaRear : deltaFront;
 
-				// NUR in Drehrichtung
 				if (Mathf.Sign(signed) != direction)
 					continue;
 
 				float abs = Mathf.Abs(signed);
 
-				// NUR innerhalb Toleranz
 				if (abs > toleranceDeg)
 					continue;
 
@@ -578,14 +531,12 @@ namespace PhysxSimulationRework
 			if (bestAngle < 0f)
 				return false;
 
-			// snappingDirection soll in die gewÃ¤hlte Richtung zeigen
 			bestDir = Mathf.Sign(chosenSignedDelta);
 			if (bestDir == 0f) bestDir = direction;
 
 			return true;
 		}
 
-		// Helper: UpdateSnappingRangeSound privat aufrufen
 		private static void CallUpdateSnappingRangeSound(TurntableController tc, float currentSnappingAngle)
 		{
 			if (tc == null)
@@ -600,11 +551,9 @@ namespace PhysxSimulationRework
 			}
 			catch
 			{
-				// bewusst leer â€“ Sound only
 			}
 		}
 
-		// SpeedMultiplier Handling
 		private static void CacheAndApplySpeedMultiplier(TurntableController tc)
 		{
 			if (!_origSpeedMult.TryGetValue(tc, out float original))
@@ -689,7 +638,6 @@ namespace PhysxSimulationRework
 				if (coupler == null || !coupler.IsCoupled())
 					continue;
 
-				// ❗ Beim Derail dürfen NUR gekoppelte Kupplungen betroffen sein
 				switch (coupler.state)
 				{
 					case ChainCouplerInteraction.State.Attached_Loose:
@@ -700,7 +648,6 @@ namespace PhysxSimulationRework
 						continue;
 				}
 
-				// 🎲 Zufall
 				if (UnityEngine.Random.value > chance)
 					continue;
 
@@ -708,7 +655,6 @@ namespace PhysxSimulationRework
 				if (cj == null)
 					continue;
 
-				// 🔥 WICHTIG: PhysX darf sofort brechen
 				cj.breakForce = 1f;
 				cj.breakTorque = 1f;
 
@@ -725,9 +671,7 @@ namespace PhysxSimulationRework
 	// -----------------------------
 	internal static class CouplerJointRegistry
 	{
-		// Joint instanceID → *ALLE* Coupler, die diesen Joint teilen (beide Seiten der Kupplung)
 		public static readonly Dictionary<int, List<Coupler>> JointToCouplers = new();
-		// 🔒 NEU: welche Joints dürfen aktuell brechen
 		public static readonly HashSet<int> ArmedJoints = new();
 		
 		public static void Register(int jointId, Coupler coupler)
@@ -740,7 +684,6 @@ namespace PhysxSimulationRework
 				JointToCouplers[jointId] = list;
 			}
 
-			// Duplikate vermeiden (Reference-Equals)
 			for (int i = 0; i < list.Count; i++)
 			{
 				if (ReferenceEquals(list[i], coupler))
@@ -773,15 +716,12 @@ namespace PhysxSimulationRework
 
 			ModLog.Coupler($"Joint BROKE | id={jointId} | force={breakForce:F1}");
 
-			// 🔒 HARTER SCHUTZ:
-			// Joint darf NUR reagieren, wenn er im selben Frame explizit "armed" war
 			if (!CouplerJointRegistry.ArmedJoints.Contains(jointId))
 			{
 				ModLog.Coupler($"IGNORE broken joint (NOT ARMED) | id={jointId}");
 				return;
 			}
 
-			// Einmalig reagieren → sofort disarmen
 			CouplerJointRegistry.ArmedJoints.Remove(jointId);
 
 			if (!CouplerJointRegistry.JointToCouplers.TryGetValue(jointId, out var couplers)
@@ -791,7 +731,6 @@ namespace PhysxSimulationRework
 				return;
 			}
 
-			// DEBUG: Alle beteiligten Kupplungen loggen
 			for (int i = 0; i < couplers.Count; i++)
 			{
 				var c = couplers[i];
@@ -809,7 +748,6 @@ namespace PhysxSimulationRework
 				);
 			}
 
-			// BEST CASE: Loose-Seite wählen
 	#pragma warning disable CS8600
 			Coupler chosen = null;
 	#pragma warning restore CS8600
@@ -827,7 +765,6 @@ namespace PhysxSimulationRework
 				}
 			}
 
-			// 2) Fallback: Loose Coupler nehmen
 			if (chosen == null)
 			{
 				for (int i = 0; i < couplers.Count; i++)
@@ -844,7 +781,6 @@ namespace PhysxSimulationRework
 				}
 			}
 
-			// 3) Letzter Fallback: irgendein coupled
 			if (chosen == null)
 			{
 				for (int i = 0; i < couplers.Count; i++)
@@ -863,10 +799,8 @@ namespace PhysxSimulationRework
 	[HarmonyPatch(typeof(DrivingForce), "FixedUpdate")]
 	public static class DrivingForce_StressTrigger_Patch
 	{
-		// merkt sich, ob eine Kupplung bereits die Chance "gewonnen" hat
 		private static readonly HashSet<Coupler> breakUnlocked = new();
 
-		// Vanilla-Werte (optional, falls du später restore willst)
 		public static readonly Dictionary<Coupler, float> VanillaBreakForce = new();
 		public static readonly Dictionary<Coupler, float> VanillaBreakTorque = new();
 		
@@ -875,7 +809,6 @@ namespace PhysxSimulationRework
 			loggedCars.Clear();
 		}
 
-		// verhindert Log-Spam: pro Wagen nur einmal loggen
 		private static readonly HashSet<string> loggedCars = new();		
 
 		static void Postfix(DrivingForce __instance)
@@ -896,7 +829,6 @@ namespace PhysxSimulationRework
 			if (ts == null || ts.cars == null)
 				return;
 
-			// Alle Wagen im Zugverband
 			foreach (var car in ts.cars)
 			{
 				if (car == null)
@@ -922,10 +854,8 @@ namespace PhysxSimulationRework
 					if (jointId == 0)
 						continue;
 
-					// Joint → Coupler Registry (beide Seiten!)
 					CouplerJointRegistry.Register(jointId, coupler);
 
-					// BreakListener einmalig anhängen
 					var go = cj.gameObject;
 					if (go.GetComponent<CouplerJointBreakListener>() == null)
 					{
@@ -933,14 +863,12 @@ namespace PhysxSimulationRework
 						ModLog.Coupler($"BreakListener attached | jointId={jointId}");
 					}
 
-					// Vanilla-Werte einmal merken
 					if (!VanillaBreakForce.ContainsKey(coupler))
 					{
 						VanillaBreakForce[coupler] = cj.breakForce;
 						VanillaBreakTorque[coupler] = cj.breakTorque;
 					}
 
-					// ❌ Global deaktiviert oder Chance = 0
 					if (settings.chanceToBreakOnStress <= 0f)
 					{
 						cj.breakForce = float.PositiveInfinity;
@@ -950,11 +878,9 @@ namespace PhysxSimulationRework
 						continue;
 					}
 
-					// 🚫 ABSOLUTES VERBOT: Tight / Übergangszustände
 					switch (coupler.state)
 					{
 						case ChainCouplerInteraction.State.Attached_Loose:
-							// erlaubt → weiter prüfen
 							break;
 
 						case ChainCouplerInteraction.State.Attached_Tight:
@@ -973,7 +899,6 @@ namespace PhysxSimulationRework
 
 					if (!armed)
 					{
-						// nicht armed => Vanilla bzw. Infinity (je nachdem was du willst)
 						if (VanillaBreakForce.TryGetValue(coupler, out var bf))
 							cj.breakForce = bf;
 						else
@@ -987,7 +912,6 @@ namespace PhysxSimulationRework
 						continue;
 					}
 
-					// armed => PhysX darf über customBreakForce brechen
 					cj.breakForce = settings.customBreakForce;
 					cj.breakTorque = settings.customBreakForce;
 				}
@@ -1000,7 +924,6 @@ namespace PhysxSimulationRework
 			if (settings == null)
 				return;
 
-			// Ergebnis fest in ArmedJoints speichern
 			CouplerJointRegistry.ArmedJoints.Remove(jointId);
 
 			bool success = UnityEngine.Random.value <= settings.chanceToBreakOnStress;
@@ -1015,7 +938,7 @@ namespace PhysxSimulationRework
 
 
 		// -------------------------------------------------
-		// 🔍 Helper: Loggt TrainCar.ID + beide Kupplungen
+		// Helper: Loggt TrainCar.ID + beide Kupplungen
 		// -------------------------------------------------
 		internal static void LogCarCouplerJoints_Public(TrainCar car)
 		{
@@ -1038,8 +961,6 @@ namespace PhysxSimulationRework
 				"Registered jointIds:"
 			);
 
-			// TrainCar definiert: frontCoupler => couplers[0], rearCoupler => couplers[1]
-			// Daher loggen wir exakt diese beiden.
 			LogCoupler(car.frontCoupler, "FRONT");
 			LogCoupler(car.rearCoupler, "REAR");
 		}
@@ -1057,7 +978,7 @@ namespace PhysxSimulationRework
 
 			if (cj == null)
 			{
-				Debug.Log($"- jointId=<none> | coupler={label} | state={state}");
+				ModLog.Coupler($"- jointId=<none> | coupler={label} | state={state}");
 				return;
 			}
 
@@ -1082,7 +1003,7 @@ namespace PhysxSimulationRework
 				return;
 
 			int locoCount = 0;
-			int tenderCount = 0; // aktuell bewusst 0
+			int tenderCount = 0; 
 			int carCount = 0;
 
 			List<string> lines = new();
@@ -1115,10 +1036,8 @@ namespace PhysxSimulationRework
 				string.Join("\n", lines)
 			);
 
-			// 🔄 WICHTIG: Snapshot-Reset
 			DrivingForce_StressTrigger_Patch.ClearLoggedCars();
 			
-			// 🎲 Stress-Chance EINMAL pro aktivem Joint würfeln
 			foreach (var c in ts.cars)
 			{
 				if (c == null || c.couplers == null)
@@ -1142,7 +1061,7 @@ namespace PhysxSimulationRework
 						continue;
 
 					if (!rolledJoints.Add(jointId))
-						continue; // diesen jointId haben wir beim Refresh schon gewürfelt
+						continue;
 
 					DrivingForce_StressTrigger_Patch.RollStressChanceForJoint(jointId, coupler);
 				}
