@@ -1,11 +1,11 @@
 {
 	"Id": "PhysxSimulationRework",
-	"Version": "1.00.1",
+	"Version": "1.00.2",
 	"DisplayName": "PhysX SimulationRework",
 	"Author": "CJ187",
 	"Credits": "Coookie, NotAnOption and ChatGPT",
 	"EntryMethod": "PhysxSimulationRework.Main.Load",
 	"ManagerVersion": "0.27.2",
 	"HomePage": "https://www.nexusmods.com/derailvalley/mods/1419",
-	"Repository": "https://raw.githubusercontent.com/gercj187/PhysxSimulationRework/refs/heads/main/repository.json"
+	"Repository": "https://raw.githubusercontent.com/gercj187/MoreDemoLocos/refs/heads/main/repository.json"
 }
