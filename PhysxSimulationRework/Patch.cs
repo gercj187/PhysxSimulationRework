@@ -480,13 +480,7 @@ namespace PhysxSimulationRework
 			return false;
 		}
 
-		private static bool TryFindSnappingAngleDirectional(
-			TurntableRailTrack tt,
-			int direction,
-			float toleranceDeg,
-			out float bestAngle,
-			out float bestDir
-		)
+		private static bool TryFindSnappingAngleDirectional(TurntableRailTrack tt,int direction,float toleranceDeg,out float bestAngle,out float bestDir)
 		{
 			bestAngle = -1f;
 			bestDir = 0f;
@@ -498,43 +492,52 @@ namespace PhysxSimulationRework
 				return false;
 
 			float front = TurntableRailTrack.AngleRange0To360(tt.currentYRotation);
-			float rear = TurntableRailTrack.AngleRange0To360(tt.currentYRotation + 180f);
+			float rear  = TurntableRailTrack.AngleRange0To360(tt.currentYRotation + 180f);
 
-			float bestAbs = float.MaxValue;
-			float chosenSignedDelta = 0f;
+			float bestDelta = float.MaxValue;
 
 			for (int i = 0; i < tt.trackEnds.Count; i++)
 			{
-				float teAngle = tt.trackEnds[i].angle;
+				float teAngle = TurntableRailTrack.AngleRange0To360(tt.trackEnds[i].angle);
 
-				float deltaFront = TurntableRailTrack.AngleRangeNeg180To180(teAngle - front);
-				float deltaRear = TurntableRailTrack.AngleRangeNeg180To180(teAngle - rear);
+				// -----------------------------
+				// FRONT side
+				// -----------------------------
+				float deltaFront = TurntableRailTrack.AngleRange0To360(teAngle - front);
 
-				float signed = (Mathf.Abs(deltaRear) <= Mathf.Abs(deltaFront)) ? deltaRear : deltaFront;
+				if (direction == -1)
+					deltaFront = 360f - deltaFront;
 
-				if (Mathf.Sign(signed) != direction)
-					continue;
-
-				float abs = Mathf.Abs(signed);
-
-				if (abs > toleranceDeg)
-					continue;
-
-				if (abs < bestAbs)
+				if (deltaFront > 0f && deltaFront <= toleranceDeg)
 				{
-					bestAbs = abs;
-					bestAngle = teAngle;
-					chosenSignedDelta = signed;
+					if (deltaFront < bestDelta)
+					{
+						bestDelta = deltaFront;
+						bestAngle = teAngle;
+						bestDir = direction;
+					}
+				}
+
+				// -----------------------------
+				// REAR side (180° versetzt)
+				// -----------------------------
+				float deltaRear = TurntableRailTrack.AngleRange0To360(teAngle - rear);
+
+				if (direction == -1)
+					deltaRear = 360f - deltaRear;
+
+				if (deltaRear > 0f && deltaRear <= toleranceDeg)
+				{
+					if (deltaRear < bestDelta)
+					{
+						bestDelta = deltaRear;
+						bestAngle = teAngle;
+						bestDir = direction;
+					}
 				}
 			}
 
-			if (bestAngle < 0f)
-				return false;
-
-			bestDir = Mathf.Sign(chosenSignedDelta);
-			if (bestDir == 0f) bestDir = direction;
-
-			return true;
+			return bestAngle >= 0f;
 		}
 
 		private static void CallUpdateSnappingRangeSound(TurntableController tc, float currentSnappingAngle)
