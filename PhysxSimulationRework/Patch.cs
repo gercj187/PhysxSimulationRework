@@ -66,6 +66,8 @@ namespace PhysxSimulationRework
 
 		private static readonly Dictionary<TurntableController, int> _lastDriveDir = new();
 		
+		private static readonly Dictionary<TurntableController, float> _lastAngle = new();
+		
 		// -----------------------------
 		// Turntable Bell Sound
 		// -----------------------------
@@ -95,6 +97,29 @@ namespace PhysxSimulationRework
 			{
 				ModLog.Turntable("DashWarning_01_Bell NOT found in Resources");
 			}
+		}
+		
+		private static bool IsActuallyMoving(TurntableController tc)
+		{
+			var tt = tc.turntable;
+			if (tt == null)
+				return false;
+
+			float current = tt.currentYRotation;
+
+			bool moving = false;
+
+			if (_lastAngle.TryGetValue(tc, out float last))
+			{
+				float delta = Mathf.Abs(
+					TurntableRailTrack.AngleRangeNeg180To180(current - last)
+				);
+
+				moving = delta > 0.001f;
+			}
+
+			_lastAngle[tc] = current;
+			return moving;
 		}
 		
 		private static void EnsureBellLoaded()
@@ -267,8 +292,8 @@ namespace PhysxSimulationRework
 			var settings = Main.Settings;
 			if (settings == null)
 				return;
-	
-			bool isMoving = _rotationSoundIntensity(tc) > 0f;
+
+			bool isMoving = IsActuallyMoving(tc);
 
 			bool blockBecausePush =
 				!settings.enablePushToDetect
@@ -294,7 +319,7 @@ namespace PhysxSimulationRework
 				_nextBellTime[tc] = Time.time + 3f;
 			}
 		}
-		
+
 		[HarmonyTargetMethod]
 		private static MethodBase TargetMethod()
 			=> AccessTools.Method(typeof(TurntableController), "FixedUpdate");
@@ -302,6 +327,11 @@ namespace PhysxSimulationRework
 		[HarmonyPrefix]
 		private static bool FixedUpdate_Prefix(TurntableController __instance)
 		{
+			if (!__instance.PlayerControlAllowed)
+			{
+				_rotationSoundIntensity(__instance) = 0f;
+			}
+
 			var settings = Main.Settings;
 			if (settings == null || !settings.enableTurntableTweaks)
 			{
@@ -331,12 +361,14 @@ namespace PhysxSimulationRework
 			if (posInput > 0f)
 			{
 				_lastDriveDir[__instance] = +1;
+				
 				if (pushPos != 0f)
 					_lastWasPush.Add(__instance);
 				else
 					_lastWasPush.Remove(__instance);
 				
 				_rotationSoundIntensity(__instance) = posInput;
+				
 				_snappingAngleSet(__instance) = false;
 
 				CallUpdateSnappingRangeSound(__instance, turntable.ClosestSnappingAngle());
@@ -354,12 +386,14 @@ namespace PhysxSimulationRework
 			if (negInput > 0f)
 			{
 				_lastDriveDir[__instance] = -1;
+				
 				if (pushNeg != 0f)
 					_lastWasPush.Add(__instance);
 				else
 					_lastWasPush.Remove(__instance);
 
 				_rotationSoundIntensity(__instance) = negInput;
+
 				_snappingAngleSet(__instance) = false;
 
 				CallUpdateSnappingRangeSound(__instance, turntable.ClosestSnappingAngle());
@@ -460,7 +494,7 @@ namespace PhysxSimulationRework
 
 					float num8 = snapDir * Mathf.Min(remainingDeg, maxStep);
 
-					_rotationSoundIntensity(__instance) = Mathf.Max( _rotationSoundIntensity(__instance), 0.25f);
+					_rotationSoundIntensity(__instance) = Mathf.Max(_rotationSoundIntensity(__instance), 0.25f);
 					
 					turntable.targetYRotation = TurntableRailTrack.AngleRange0To360( turntable.targetYRotation + num8);
 
