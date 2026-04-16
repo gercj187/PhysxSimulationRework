@@ -2,6 +2,7 @@ using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Audio;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using DV.Utils;
@@ -10,6 +11,8 @@ using DV.Simulation.Brake;
 using DV.CabControls;
 using DV.Simulation.Cars;
 using DV.VFX;
+//using DV.ModularAudioCar;
+//using DV.Damage;
 
 namespace PhysxSimulationRework
 {
@@ -654,7 +657,7 @@ namespace PhysxSimulationRework
 	// Couplefails - DERAIL
 	// -----------------------------
 
-    [HarmonyPatch(typeof(TrainCar), "Derail")]
+	[HarmonyPatch(typeof(TrainCar), "Derail")]
 	public static class TrainCar_Derail_Patch
 	{
 		static void Postfix(TrainCar __instance)
@@ -666,11 +669,22 @@ namespace PhysxSimulationRework
 			if (__instance.couplers == null)
 				return;
 
-			float chance = settings.chanceToBreakOnDerail;
-			if (chance <= 0f)
-				return;
+			SingletonBehaviour<CoroutineManager>.Instance.Run(
+				DelayedCouplerHandling(__instance, settings)
+			);
+		}
 
-			foreach (var coupler in __instance.couplers)
+		private static IEnumerator DelayedCouplerHandling(TrainCar car, PhysxSimulationReworkSettings settings)
+		{
+			// 🔥 WICHTIG: warten bis DV fertig ist
+			yield return new WaitForSeconds(1.0f);
+
+			if (car == null || car.couplers == null)
+				yield break;
+
+			float chance = settings.chanceToBreakOnDerail;
+
+			foreach (var coupler in car.couplers)
 			{
 				if (coupler == null || !coupler.IsCoupled())
 					continue;
@@ -685,27 +699,86 @@ namespace PhysxSimulationRework
 						continue;
 				}
 
-				if (UnityEngine.Random.value > chance)
-					continue;
+				var other = coupler.GetCoupled();
 
-				var cj = coupler.rigidCJ;
-				if (cj == null)
-					continue;
+				// =========================
+				// 🔥 LOCKERN (funktioniert jetzt wirklich)
+				// =========================
+				coupler.SetChainTight(false);
 
-				cj.breakForce = 1f;
-				cj.breakTorque = 1f;
+				if (other != null)
+					other.SetChainTight(false);
 
-				ModLog.Derail(
-					$"[PhysxSimulationRework][PhysX] Coupler weakened by derailment " +
-					$"| CarID={__instance.ID} | State={coupler.state}"
-				);
+				// =========================
+				// 🔥 SCHWÄCHEN triggern (Flag nur)
+				// =========================
+				if (chance > 0f && UnityEngine.Random.value <= chance)
+				{
+					MarkCouplerForWeakening(coupler);
+
+					if (other != null)
+						MarkCouplerForWeakening(other);
+
+					ModLog.Derail(
+						$"[PhysxSimulationRework] Coupler marked for weakening | CarID={car.ID}"
+					);
+				}
 			}
+		}
+
+		// =========================
+		// 🔥 MARKIERUNG statt direkt setzen
+		// =========================
+		private static void MarkCouplerForWeakening(Coupler coupler)
+		{
+			if (coupler == null)
+				return;
+
+			WeakCouplerRegistry.Mark(coupler);
+		}
+	}
+
+	[HarmonyPatch(typeof(Coupler), "CreateRigidJoint")]
+	public static class Coupler_CreateRigidJoint_Patch
+	{
+		static void Postfix(Coupler __instance)
+		{
+			if (__instance == null || __instance.rigidCJ == null)
+				return;
+
+			// 👉 Nur anwenden wenn markiert
+			if (!WeakCouplerRegistry.IsMarked(__instance))
+				return;
+
+			__instance.rigidCJ.breakForce = 1f;
+			__instance.rigidCJ.breakTorque = 1f;
+
+			ModLog.Derail(
+				$"[PhysxSimulationRework] breakForce overridden AFTER CreateJoint"
+			);
 		}
 	}
 
     // -----------------------------
 	// Couplefails - FORCE BRAKE
 	// -----------------------------
+
+	public static class WeakCouplerRegistry
+	{
+		private static readonly HashSet<Coupler> marked = new HashSet<Coupler>();
+
+		public static void Mark(Coupler coupler)
+		{
+			if (coupler != null)
+				marked.Add(coupler);
+		}
+
+		public static bool IsMarked(Coupler coupler)
+		{
+			return coupler != null && marked.Contains(coupler);
+		}
+	}
+		
 	internal static class CouplerJointRegistry
 	{
 		public static readonly Dictionary<int, List<Coupler>> JointToCouplers = new();
@@ -1104,5 +1177,259 @@ namespace PhysxSimulationRework
 				}
 			}
 		}
+	}	
+	
+	// ======================================================
+	// DYNAMIC DERAIL RISK
+	// ======================================================
+
+	[HarmonyPatch(typeof(Bogie), "FixedUpdate")]
+	internal static class DynamicDerailRisk_Patch
+	{
+		// Timer pro Wagen
+		private static readonly Dictionary<TrainCar, float> timers = new();
+
+		// Risk Level pro Wagen
+		private static readonly Dictionary<TrainCar, float> riskLevel = new();
+
+		// ======================================================
+		// CORE CALCULATION
+		// ======================================================
+		private static float CalculateNewDerailChance(
+			float damagePercent,
+			float speedKmh,
+			bool exploded,
+			PhysxSimulationReworkSettings settings
+		)
+		{
+			// SafeSpeed = Restzustand (DEINE LOGIK)
+			float condition = 100f - damagePercent;
+			float safeSpeed = Mathf.Max(settings.baseSafeSpeed, condition);
+
+			// Unter SafeSpeed → komplett safe
+			if (speedKmh <= safeSpeed)
+				return 0f;
+
+			float overSpeed = speedKmh - safeSpeed;
+
+			// Speed Faktor
+			float speedFactor = speedKmh * 0.1f;
+
+			// Tier Scaling (jede 10 km/h +0.1)
+			float tier = Mathf.Floor(overSpeed / 10f);
+			float tierMultiplier = 0.1f + (tier * 0.1f);
+
+			float safeFactor = overSpeed * tierMultiplier;
+
+			// Damage Faktor (WICHTIG: damagePercent!)
+			float baseDamage = damagePercent / 100f;
+
+			float damageScale = 1f;
+
+			switch (settings.damageScaling)
+			{
+				case DamageScalingMode.Half:
+					damageScale = 0.5f;
+					break;
+
+				case DamageScalingMode.Normal:
+					damageScale = 1f;
+					break;
+
+				case DamageScalingMode.High:
+					damageScale = 1.5f;
+					break;
+			}
+
+			float damageFactor = baseDamage * damageScale;
+
+			// Explosion → doppelt
+			if (exploded)
+				damageFactor *= 2f;
+
+			float chance = (speedFactor + safeFactor) * damageFactor;
+
+			// Prozent → 0–1
+			return Mathf.Clamp(chance / 100f, 0f, 1f);
+		}
+
+		// ======================================================
+		// MAIN LOOP
+		// ======================================================
+		static void Postfix(Bogie __instance)
+		{
+			var settings = Main.Settings;
+			if (settings == null || !settings.enableDynamicDerailRisk)
+				return;
+
+			if (__instance == null || __instance.Car == null)
+				return;
+
+			// Nur Front Bogie → 1x pro Wagen
+			if (!__instance.isFrontBogie)
+				return;
+
+			TrainCar car = __instance.Car;
+
+			if (car.derailed || __instance.rb == null)
+				return;
+
+			// =========================
+			// TIMER PRO WAGEN
+			// =========================
+			if (!timers.ContainsKey(car))
+				timers[car] = 0f;
+
+			timers[car] += Time.fixedDeltaTime;
+
+			if (timers[car] < settings.derailInterval)
+				return;
+
+			timers[car] = 0f;
+
+			// =========================
+			// DATEN
+			// =========================
+			float speedKmh = __instance.rb.velocity.magnitude * 3.6f;
+			
+			float damagePercent = car.CarDamage != null
+				? car.CarDamage.DamagePercentage * 100f
+				: 0f;
+				
+			if (speedKmh <= 1f || damagePercent <= 0f)
+			return;
+
+			bool exploded = car.CarDamage != null && car.CarDamage.DamagePercentage >= 1f;
+
+			string carId = car.ID;
+			string carType = car.carLivery != null ? car.carLivery.id : "UNKNOWN";
+
+			float chance = CalculateNewDerailChance(
+				damagePercent,
+				speedKmh,
+				exploded,
+				settings
+			);
+
+			// =========================
+			// RISK SYSTEM
+			// =========================
+			if (!riskLevel.ContainsKey(car))
+				riskLevel[car] = 0f;
+
+			bool success = UnityEngine.Random.value < chance;
+
+			if (success)
+			{
+				riskLevel[car] += settings.riskIncreasePerHit;
+
+				ModLog.Derail(
+					$"SUCCESS | Car={carId} ({carType}) | Risk={riskLevel[car]:F2} | Chance={chance * 100f:F1}% | Speed={speedKmh:F0} | Damage={damagePercent:F0}"
+				);
+			}
+			else
+			{
+				riskLevel[car] -= settings.riskDecreaseOnFail;
+				riskLevel[car] = Mathf.Max(0f, riskLevel[car]);
+
+				ModLog.Derail(
+					$"FAIL | Car={carId} ({carType}) | Risk={riskLevel[car]:F2} | Chance={chance * 100f:F1}% | Speed={speedKmh:F0} | Damage={damagePercent:F0}"
+				);
+			}
+
+			// =========================
+			// DERAIL TRIGGER
+			// =========================
+			if (riskLevel[car] >= settings.riskThreshold)
+			{
+				ModLog.Derail(
+					$"DERAIL TRIGGERED | Car={carId} ({carType}) | Risk={riskLevel[car]:F2} | Speed={speedKmh:F0}"
+				);
+
+				riskLevel[car] = 0f;
+
+				__instance.Derail("Dynamic derail system");
+			}
+		}
 	}
+	
+	[HarmonyPatch(typeof(DerailedParticles), "OnCollision")]
+    public static class DerailedParticles_OnCollision_Patch
+    {
+        static void Prefix(object __instance, Collision collision, bool becausePause)
+        {
+            if (__instance == null || collision == null || becausePause)
+                return;
+
+            // 🔥 Zugriff auf private field "car"
+            TrainCar car = (TrainCar)typeof(DerailedParticles)
+                .GetField("car", BindingFlags.NonPublic | BindingFlags.Instance)
+                .GetValue(__instance);
+
+            if (car == null)
+                return;
+
+            if (!car.derailed)
+                return;
+
+            Collider col = collision.collider;
+            if (col == null)
+                return;
+
+            // 👉 ORIGINAL Terrain check
+            bool isTerrain = col.gameObject.layer == LayerMask.NameToLayer("Terrain");
+
+            // 👉 NEU: Gravel check
+            bool isGravel = IsGravelCollider(col);
+
+            if (!isTerrain && !isGravel)
+                return;
+
+            // 👉 Jetzt manuell DV Logik triggern
+            CallDoDrag(__instance, collision);
+            CallDoImpact(__instance, collision);
+        }
+
+        // =============================
+        private static bool IsGravelCollider(Collider col)
+        {
+            string path = GetFullPath(col.transform);
+            return path.Contains("Near_Colliders_Gravel");
+        }
+
+        // =============================
+        private static void CallDoDrag(object instance, Collision collision)
+        {
+            MethodInfo method = typeof(DerailedParticles)
+                .GetMethod("DoDrag", BindingFlags.NonPublic | BindingFlags.Instance);
+
+            method?.Invoke(instance, new object[] { collision });
+        }
+
+        private static void CallDoImpact(object instance, Collision collision)
+        {
+            MethodInfo method = typeof(DerailedParticles)
+                .GetMethod("DoImpact", BindingFlags.NonPublic | BindingFlags.Instance);
+
+            method?.Invoke(instance, new object[] { collision });
+        }
+
+        // =============================
+        private static string GetFullPath(Transform t)
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+            while (t != null)
+            {
+                if (sb.Length == 0)
+                    sb.Insert(0, t.name);
+                else
+                    sb.Insert(0, t.name + "/");
+
+                t = t.parent;
+            }
+
+            return sb.ToString();
+        }
+    }
 }

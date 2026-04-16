@@ -10,6 +10,13 @@ namespace PhysxSimulationRework
 		TrainBell_DH4
 	}
 	
+	public enum DamageScalingMode
+	{
+		Half,     // /2
+		Normal,   // x1
+		High      // x1.5
+	}
+	
     public class PhysxSimulationReworkSettings : UnityModManager.ModSettings
     {
 		//TURNTABLE
@@ -25,10 +32,21 @@ namespace PhysxSimulationRework
 				
 		// COUPLER FAILURE		
 		public bool enableCouplerFailure = true;
-        public float chanceToBreakOnDerail = 0.5f;
-        public float chanceToBreakOnStress = 0.35f;
+        public float chanceToBreakOnDerail = 1.0f;
+        public float chanceToBreakOnStress = 1.0f;
         public float customBreakForce = 1000000f;
+				
+		// DYNAMIC DERAIL RISK
+		public bool enableDynamicDerailRisk = true; 
+		public float baseSafeSpeed = 10f;
+		public float derailInterval = 10f;
+		public DamageScalingMode damageScaling = DamageScalingMode.Normal;
+		public float riskIncreasePerHit = 1f;
+		public float riskDecreaseOnFail = 0.5f;
+		public float riskThreshold = 3f;
 		
+		//DEBUG
+		public bool enableDerailDebug = false;
 		//LOGS
 		public bool enableTurntableLog = false;
 		public bool enableBrakepipeLog = false;
@@ -36,8 +54,180 @@ namespace PhysxSimulationRework
 		public bool enableCouplerLog = false;
 
         public override void Save(UnityModManager.ModEntry modEntry)
+		{
+			Save(this, modEntry);
+
+			ModLog.Derail("Settings reloaded live");
+		}
+		
+		// =========================
+		// HELPER
+		// =========================	
+		
+		private GUIStyle? _headerStyle;
+		private GUIStyle? _cellStyle;
+
+		private Texture2D CreateTexture(Color col)
+		{
+			Texture2D tex = new Texture2D(1, 1);
+			tex.SetPixel(0, 0, col);
+			tex.Apply();
+			return tex;
+		}
+		
+		private void DrawRotationPresetButton(float value, string label)
+		{
+			bool isActive = Mathf.Abs(turntableRotationSpeedMultiplier - value) < 0.001f;
+			// Farbe merken
+			Color prevColor = GUI.color;
+			if (isActive)
+			{
+				GUI.color = Color.green;
+			}
+			if (GUILayout.Button(label, GUILayout.Width(122)))
+			{
+				turntableRotationSpeedMultiplier = value;
+			}
+			// Farbe zurücksetzen
+			GUI.color = prevColor;
+		}
+		
+		private void DrawSoundPresetButton(
+			TurntableWarningSound value,
+			string label
+		)
+		
+		{
+			bool isActive = turntableWarningSound == value;
+
+			Color prev = GUI.color;
+			if (isActive)
+				GUI.color = Color.green;
+
+			if (GUILayout.Button(label, GUILayout.Width(249)))
+			{
+				if (turntableWarningSound != value)
+				{
+					turntableWarningSound = value;
+					TurntableTweaks.NotifyBellSoundChanged();
+				}
+			}
+
+			GUI.color = prev;
+		}
+		
+		// =========================
+        // CALCULATION (PREVIEW)
+        // =========================
+        private float CalculatePreviewChance(float damagePercent, float speedKmh)
         {
-            Save(this, modEntry);
+            float condition = 100f - damagePercent;
+			float safeSpeed = Mathf.Max(baseSafeSpeed, condition);
+
+            if (speedKmh <= safeSpeed)
+                return 0f;
+
+            float overSpeed = speedKmh - safeSpeed;
+
+            float speedFactor = speedKmh * 0.1f;
+
+            float tier = Mathf.Floor(overSpeed / 10f);
+            float tierMultiplier = 0.1f + (tier * 0.1f);
+
+            float safeFactor = overSpeed * tierMultiplier;
+
+            float baseDamage = damagePercent / 100f;
+
+            float damageScale = 1f;
+
+            switch (damageScaling)
+            {
+                case DamageScalingMode.Half:
+                    damageScale = 0.5f;
+                    break;
+
+                case DamageScalingMode.Normal:
+                    damageScale = 1f;
+                    break;
+
+                case DamageScalingMode.High:
+                    damageScale = 1.5f;
+                    break;
+            }
+
+            float damageFactor = baseDamage * damageScale;
+
+            float chance = (speedFactor + safeFactor) * damageFactor;
+
+            return Mathf.Clamp(chance, 0f, 100f);
+        }
+
+        // =========================
+        // DEBUG TABLE
+        // =========================
+        private void DrawDerailTable()
+		{
+			// STYLE CACHE
+			if (_headerStyle == null)
+			{
+				_headerStyle = new GUIStyle(GUI.skin.button);
+				_headerStyle.normal.background = CreateTexture(new Color(0.7f, 0.7f, 0.7f));
+				_headerStyle.normal.textColor = Color.black;
+			}
+
+			if (_cellStyle == null)
+			{
+				_cellStyle = new GUIStyle(GUI.skin.button);
+				_cellStyle.normal.background = CreateTexture(new Color(0.3f, 0.3f, 0.3f));
+			}
+
+			float[] speeds = { 30f, 60f, 90f };
+			float[] damages = { 0f, 25f, 50f, 75f, 100f };
+
+            BeginHorizontal();
+            Button("Damage", _headerStyle, Width(122));
+
+            foreach (float s in speeds)
+                Button($"{s} km/h", _headerStyle, Width(122));
+
+            EndHorizontal();
+
+            foreach (float d in damages)
+            {
+                BeginHorizontal();
+
+                Button($"{d}%", _headerStyle, Width(122));
+
+                foreach (float s in speeds)
+                {
+                    float chance = CalculatePreviewChance(d, s);
+
+                    Color textColor = GetChanceColor(chance / 100f);
+
+                    _cellStyle.normal.textColor = textColor;
+					
+					Button($"{chance:0.0}%", _cellStyle, Width(122));
+                }
+
+                EndHorizontal();
+            }
+        }
+
+        // =========================
+        // COLOR HELPER
+        // =========================
+        private Color GetChanceColor(float chance)
+        {
+            if (chance <= 0.009f)
+                return Color.green;
+
+            if (chance <= 0.05f)
+                return Color.yellow;
+
+            if (chance <= 0.25f)
+                return new Color(1f, 0.5f, 0f);
+
+            return Color.red;
         }
 
         public void Draw(UnityModManager.ModEntry modEntry)
@@ -145,24 +335,28 @@ namespace PhysxSimulationRework
 					richText = true,
 					wordWrap = true
 				};
-				// --- Entgleisung ---
-				string derailLabel = chanceToBreakOnDerail <= 0f
-					? "Chance on Derailment: (Disabled)"
-					: $"Chance on Derailment: {Mathf.RoundToInt(chanceToBreakOnDerail * 100)}%";
-				Label(derailLabel);
-				chanceToBreakOnDerail = HorizontalSlider(chanceToBreakOnDerail, 0f, 1f, Width(500));
-				if (chanceToBreakOnDerail > 0f)
+				
+				if (enableDerailDebug)
 				{
-					GUILayout.Label("<i>(Adjusts the probability that couplers will fail when a vehicle derails.)</i>", italicStyle);
-				}
-				Space(5);
-				// --- Überlast (Lose) ---
-				string stressLabel = chanceToBreakOnStress <= 0f
-					? "Stress Failure Chance: (Disabled)"
-					: $"Stress Failure Chance: {Mathf.RoundToInt(chanceToBreakOnStress * 100)}%";
+					// --- Entgleisung ---
+					string derailLabel = chanceToBreakOnDerail <= 0f
+						? "Chance on Derailment: (Disabled)"
+						: $"Chance on Derailment: {Mathf.RoundToInt(chanceToBreakOnDerail * 100)}%";
+					Label(derailLabel);
+					chanceToBreakOnDerail = HorizontalSlider(chanceToBreakOnDerail, 0f, 1f, Width(500));
+					if (chanceToBreakOnDerail > 0f)
+					{
+						GUILayout.Label("<i>(Adjusts the probability that couplers will fail when a vehicle derails.)</i>", italicStyle);
+					}
+					Space(5);
+					// --- Überlast (Lose) ---
+					string stressLabel = chanceToBreakOnStress <= 0f
+						? "Stress Failure Chance: (Disabled)"
+						: $"Stress Failure Chance: {Mathf.RoundToInt(chanceToBreakOnStress * 100)}%";
 
-				Label(stressLabel);
-				chanceToBreakOnStress = HorizontalSlider(chanceToBreakOnStress, 0f, 1f, Width(500));
+					Label(stressLabel);
+					chanceToBreakOnStress = HorizontalSlider(chanceToBreakOnStress, 0f, 1f, Width(500));
+				}
 				if (chanceToBreakOnStress > 0f)
 				{
 					GUILayout.Label("<i>(Adjusts the chance of coupler failure when excessive tensile force is applied.)</i>", italicStyle);
@@ -188,47 +382,109 @@ namespace PhysxSimulationRework
 						customBreakForce = 1000000f;
 					}
 				}
-			}     
+			}						
             Space(5);
-			GUILayout.EndVertical();			
-        }
-		private void DrawRotationPresetButton(float value, string label)
-		{
-			bool isActive = Mathf.Abs(turntableRotationSpeedMultiplier - value) < 0.001f;
-			// Farbe merken
-			Color prevColor = GUI.color;
-			if (isActive)
-			{
-				GUI.color = Color.green;
-			}
-			if (GUILayout.Button(label, GUILayout.Width(122)))
-			{
-				turntableRotationSpeedMultiplier = value;
-			}
-			// Farbe zurücksetzen
-			GUI.color = prevColor;
-		}
-		private void DrawSoundPresetButton(
-			TurntableWarningSound value,
-			string label
-		)
-		{
-			bool isActive = turntableWarningSound == value;
+			GUILayout.EndVertical();	
+            Space(2);
+			// ----------------------------------------
+			// DYNAMIC DERAIL RISK
+			// ----------------------------------------
+			GUILayout.BeginVertical(GUI.skin.box);
 
-			Color prev = GUI.color;
-			if (isActive)
-				GUI.color = Color.green;
+			Label("<b>Damage Derail Settings:</b>");
+			Space(5);
 
-			if (GUILayout.Button(label, GUILayout.Width(249)))
+			// =========================
+			// ENABLE TOGGLE
+			// =========================
+			enableDynamicDerailRisk = Toggle(
+				enableDynamicDerailRisk,
+				"Enable Damage Derail System"
+			);
+
+			if (enableDynamicDerailRisk)
 			{
-				if (turntableWarningSound != value)
+				Space(5);
+
+				// =========================
+				// BASE SAFE SPEED
+				// =========================
+				Label($"Safe Speed: {baseSafeSpeed:0} km/h");
+				baseSafeSpeed = HorizontalSlider(baseSafeSpeed, 0f, 25f, Width(500));
+
+				Label("<i>(Safe speed threshold below which no derailment is triggered)</i>", new GUIStyle(GUI.skin.label)
 				{
-					turntableWarningSound = value;
-					TurntableTweaks.NotifyBellSoundChanged();
-				}
+					richText = true
+				});
+
+				Space(5);
+
+				// =========================
+				// INTERVAL
+				// =========================
+				Label($"Reaction interval: {derailInterval:0} s");
+				derailInterval = HorizontalSlider(derailInterval, 5f, 15f, Width(500));
+
+				Label("<i>(time between derailment checks)</i>", new GUIStyle(GUI.skin.label)
+				{
+					richText = true
+				});
+
+				Space(10);
+
+				// =========================
+				// RISK SYSTEM
+				// =========================
+				Label("<b>Risk Settings:</b>", new GUIStyle(GUI.skin.label)
+				{
+					richText = true
+				});
+
+				Space(5);
+				
+				if (enableDerailDebug)
+				{
+					Label($"Risk gain rate per check: +{riskIncreasePerHit:0.0}");
+					riskIncreasePerHit = HorizontalSlider(riskIncreasePerHit, 0.5f, 2.0f, Width(500));
+
+					Label($"Risk decay rate per check: -{riskDecreaseOnFail:0.0}");
+					riskDecreaseOnFail = HorizontalSlider(riskDecreaseOnFail, 0.1f, 1.0f, Width(500));
+
+					Label($"Risk Threshold: {riskThreshold:0.0}");
+					riskThreshold = HorizontalSlider(riskThreshold, 1.0f, 5.0f, Width(500));
+					
+					Label("<i>(Derailment triggers once the risk reaches this threshold.)</i>", new GUIStyle(GUI.skin.label)
+					{
+						richText = true
+					});
+				}			
+
+				Label("<b>Risk Influence</b>");
+
+                BeginHorizontal();
+
+                if (Button("Low", Width(167)))
+                    damageScaling = DamageScalingMode.Half;
+
+                if (Button("Medium", Width(166)))
+                    damageScaling = DamageScalingMode.Normal;
+
+                if (Button("High", Width(167)))
+                    damageScaling = DamageScalingMode.High;
+
+                EndHorizontal();
+
+				Label("<b>Chance Preview</b>", new GUIStyle(GUI.skin.label)
+				{
+					richText = true
+				});
+
+				DrawDerailTable();
 			}
 
-			GUI.color = prev;
-		}
+			Space(5);
+			GUILayout.EndVertical();
+			Space(2);
+        }
     }
 }
