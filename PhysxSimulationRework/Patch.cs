@@ -669,22 +669,11 @@ namespace PhysxSimulationRework
 			if (__instance.couplers == null)
 				return;
 
-			SingletonBehaviour<CoroutineManager>.Instance.Run(
-				DelayedCouplerHandling(__instance, settings)
-			);
-		}
-
-		private static IEnumerator DelayedCouplerHandling(TrainCar car, PhysxSimulationReworkSettings settings)
-		{
-			// 🔥 WICHTIG: warten bis DV fertig ist
-			yield return new WaitForSeconds(1.0f);
-
-			if (car == null || car.couplers == null)
-				yield break;
-
 			float chance = settings.chanceToBreakOnDerail;
+			if (chance <= 0f)
+				return;
 
-			foreach (var coupler in car.couplers)
+			foreach (var coupler in __instance.couplers)
 			{
 				if (coupler == null || !coupler.IsCoupled())
 					continue;
@@ -699,42 +688,21 @@ namespace PhysxSimulationRework
 						continue;
 				}
 
-				var other = coupler.GetCoupled();
+				if (UnityEngine.Random.value > chance)
+					continue;
 
-				// =========================
-				// 🔥 LOCKERN (funktioniert jetzt wirklich)
-				// =========================
-				coupler.SetChainTight(false);
+				var cj = coupler.rigidCJ;
+				if (cj == null)
+					continue;
 
-				if (other != null)
-					other.SetChainTight(false);
+				cj.breakForce = 5000f;
+				cj.breakTorque = 5000f;
 
-				// =========================
-				// 🔥 SCHWÄCHEN triggern (Flag nur)
-				// =========================
-				if (chance > 0f && UnityEngine.Random.value <= chance)
-				{
-					MarkCouplerForWeakening(coupler);
-
-					if (other != null)
-						MarkCouplerForWeakening(other);
-
-					ModLog.Derail(
-						$"[PhysxSimulationRework] Coupler marked for weakening | CarID={car.ID}"
-					);
-				}
+				ModLog.Derail(
+					$"[PhysxSimulationRework][PhysX] Coupler weakened by derailment " +
+					$"| CarID={__instance.ID} | State={coupler.state}"
+				);
 			}
-		}
-
-		// =========================
-		// 🔥 MARKIERUNG statt direkt setzen
-		// =========================
-		private static void MarkCouplerForWeakening(Coupler coupler)
-		{
-			if (coupler == null)
-				return;
-
-			WeakCouplerRegistry.Mark(coupler);
 		}
 	}
 
