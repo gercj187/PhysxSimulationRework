@@ -34,7 +34,7 @@ namespace PhysxSimulationRework
 		public bool enableCouplerFailure = true;
         public float chanceToBreakOnDerail = 1.0f;
         public float chanceToBreakOnStress = 1.0f;
-        public float customBreakForce = 1000000f;
+        public float customBreakForce = 750000f;
 				
 		// DYNAMIC DERAIL RISK
 		public bool enableDynamicDerailRisk = true; 
@@ -42,8 +42,10 @@ namespace PhysxSimulationRework
 		public float derailInterval = 10f;
 		public DamageScalingMode damageScaling = DamageScalingMode.Normal;
 		public float riskIncreasePerHit = 1f;
-		public float riskDecreaseOnFail = 0.5f;
+		public float riskDecreaseOnFail = 0.25f;
 		public float riskThreshold = 3f;
+		
+		public bool enableBrakeOverheatDamage = true;
 		
 		//DEBUG
 		public bool enableDerailDebug = false;
@@ -51,6 +53,8 @@ namespace PhysxSimulationRework
 		public bool enableTurntableLog = false;
 		public bool enableBrakepipeLog = false;
 		public bool enableDerailLog = false;
+		public bool enableOverheatLog = false;
+		public bool enableRiskLog = false;
 		public bool enableCouplerLog = false;
 
         public override void Save(UnityModManager.ModEntry modEntry)
@@ -304,6 +308,7 @@ namespace PhysxSimulationRework
 			Label("<b>Brake Pipe Settings:</b>");
 			Space(5);
 			enableAsymmetricCockVenting = GUILayout.Toggle(enableAsymmetricCockVenting,"Enable Asymmetric Brake Pipe Venting");
+			
 			if (enableAsymmetricCockVenting)
 			{				
 				var italicStyle = new GUIStyle(GUI.skin.label)
@@ -324,10 +329,8 @@ namespace PhysxSimulationRework
 			GUILayout.BeginVertical(GUI.skin.box);
 			Label("<b>Coupler Settings:</b>");
 			Space(5);
-			enableCouplerFailure = Toggle(
-				enableCouplerFailure,
-				"Enable Coupler Failures"
-			);
+			enableCouplerFailure = Toggle(enableCouplerFailure,	"Enable Coupler Failures");
+			
 			if (enableCouplerFailure)
 			{		
 				var italicStyle = new GUIStyle(GUI.skin.label)
@@ -365,21 +368,28 @@ namespace PhysxSimulationRework
 					float breakForce_kN = customBreakForce / 1000f;
 
 					Label($"Tensile Force Limit: {breakForce_kN:0} kN");
-					breakForce_kN = HorizontalSlider(
+					// CHANGE: Slider mit 10 kN Raster
+					float rawBreakForce = HorizontalSlider(
 						breakForce_kN,
-						1f,
+						10f,
 						1500f,
 						Width(500)
 					);
+
+					// CHANGE: Auf 10er Schritte runden
+					breakForce_kN = Mathf.Round(rawBreakForce / 10f) * 10f;
+
+					// CHANGE: Sicherheits-Clamp
+					breakForce_kN = Mathf.Clamp(breakForce_kN, 10f, 1500f);
 					GUILayout.Label("<i>(Defines the tensile force limit at which a coupler may fail under excessive load.)</i>", italicStyle);
 					GUILayout.Label("<i>(Increasing this value makes couplers more resistant to failure.)</i>", italicStyle);
 					Space(5);
 					// Rückrechnung: kN → N
 					customBreakForce = breakForce_kN * 1000f;
 
-					if (Button("Restore Default Break Force (1000 kN)", Width(500)))
+					if (Button("Restore Default Break Force (750 kN)", Width(500)))
 					{
-						customBreakForce = 1000000f;
+						customBreakForce = 750000f;
 					}
 				}
 			}						
@@ -397,10 +407,7 @@ namespace PhysxSimulationRework
 			// =========================
 			// ENABLE TOGGLE
 			// =========================
-			enableDynamicDerailRisk = Toggle(
-				enableDynamicDerailRisk,
-				"Enable Damage Derail System"
-			);
+			enableDynamicDerailRisk = Toggle(enableDynamicDerailRisk,"Enable Damage Derail System");
 
 			if (enableDynamicDerailRisk)
 			{
@@ -481,7 +488,21 @@ namespace PhysxSimulationRework
 
 				DrawDerailTable();
 			}
+			Space(5);
+			GUILayout.EndVertical();
+			Space(2);
+			// ----------------------------------------
+			// OVERHEAT DAMAGE
+			// ----------------------------------------
+			GUILayout.BeginVertical(GUI.skin.box);
 
+			Label("<b>Brake Overheating:</b>");
+			Space(5);
+
+			// =========================
+			// ENABLE TOGGLE
+			// =========================
+			enableBrakeOverheatDamage = GUILayout.Toggle(enableBrakeOverheatDamage,"Enable brake overheat damage"); 			
 			Space(5);
 			GUILayout.EndVertical();
 			Space(2);

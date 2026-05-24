@@ -714,7 +714,6 @@ namespace PhysxSimulationRework
 			if (__instance == null || __instance.rigidCJ == null)
 				return;
 
-			// 👉 Nur anwenden wenn markiert
 			if (!WeakCouplerRegistry.IsMarked(__instance))
 				return;
 
@@ -1154,10 +1153,7 @@ namespace PhysxSimulationRework
 	[HarmonyPatch(typeof(Bogie), "FixedUpdate")]
 	internal static class DynamicDerailRisk_Patch
 	{
-		// Timer pro Wagen
 		private static readonly Dictionary<TrainCar, float> timers = new();
-
-		// Risk Level pro Wagen
 		private static readonly Dictionary<TrainCar, float> riskLevel = new();
 
 		// ======================================================
@@ -1170,26 +1166,21 @@ namespace PhysxSimulationRework
 			PhysxSimulationReworkSettings settings
 		)
 		{
-			// SafeSpeed = Restzustand (DEINE LOGIK)
 			float condition = 100f - damagePercent;
 			float safeSpeed = Mathf.Max(settings.baseSafeSpeed, condition);
 
-			// Unter SafeSpeed → komplett safe
 			if (speedKmh <= safeSpeed)
 				return 0f;
 
 			float overSpeed = speedKmh - safeSpeed;
 
-			// Speed Faktor
 			float speedFactor = speedKmh * 0.1f;
 
-			// Tier Scaling (jede 10 km/h +0.1)
 			float tier = Mathf.Floor(overSpeed / 10f);
 			float tierMultiplier = 0.1f + (tier * 0.1f);
 
 			float safeFactor = overSpeed * tierMultiplier;
 
-			// Damage Faktor (WICHTIG: damagePercent!)
 			float baseDamage = damagePercent / 100f;
 
 			float damageScale = 1f;
@@ -1211,13 +1202,11 @@ namespace PhysxSimulationRework
 
 			float damageFactor = baseDamage * damageScale;
 
-			// Explosion → doppelt
 			if (exploded)
 				damageFactor *= 2f;
 
 			float chance = (speedFactor + safeFactor) * damageFactor;
 
-			// Prozent → 0–1
 			return Mathf.Clamp(chance / 100f, 0f, 1f);
 		}
 
@@ -1233,7 +1222,6 @@ namespace PhysxSimulationRework
 			if (__instance == null || __instance.Car == null)
 				return;
 
-			// Nur Front Bogie → 1x pro Wagen
 			if (!__instance.isFrontBogie)
 				return;
 
@@ -1291,7 +1279,7 @@ namespace PhysxSimulationRework
 			{
 				riskLevel[car] += settings.riskIncreasePerHit;
 
-				ModLog.Derail(
+				ModLog.Risk(
 					$"SUCCESS | Car={carId} ({carType}) | Risk={riskLevel[car]:F2} | Chance={chance * 100f:F1}% | Speed={speedKmh:F0} | Damage={damagePercent:F0}"
 				);
 			}
@@ -1300,7 +1288,7 @@ namespace PhysxSimulationRework
 				riskLevel[car] -= settings.riskDecreaseOnFail;
 				riskLevel[car] = Mathf.Max(0f, riskLevel[car]);
 
-				ModLog.Derail(
+				ModLog.Risk(
 					$"FAIL | Car={carId} ({carType}) | Risk={riskLevel[car]:F2} | Chance={chance * 100f:F1}% | Speed={speedKmh:F0} | Damage={damagePercent:F0}"
 				);
 			}
@@ -1310,7 +1298,7 @@ namespace PhysxSimulationRework
 			// =========================
 			if (riskLevel[car] >= settings.riskThreshold)
 			{
-				ModLog.Derail(
+				ModLog.Risk(
 					$"DERAIL TRIGGERED | Car={carId} ({carType}) | Risk={riskLevel[car]:F2} | Speed={speedKmh:F0}"
 				);
 
@@ -1329,7 +1317,6 @@ namespace PhysxSimulationRework
             if (__instance == null || collision == null || becausePause)
                 return;
 
-            // 🔥 Zugriff auf private field "car"
             TrainCar car = (TrainCar)typeof(DerailedParticles)
                 .GetField("car", BindingFlags.NonPublic | BindingFlags.Instance)
                 .GetValue(__instance);
@@ -1344,28 +1331,23 @@ namespace PhysxSimulationRework
             if (col == null)
                 return;
 
-            // 👉 ORIGINAL Terrain check
             bool isTerrain = col.gameObject.layer == LayerMask.NameToLayer("Terrain");
 
-            // 👉 NEU: Gravel check
             bool isGravel = IsGravelCollider(col);
 
             if (!isTerrain && !isGravel)
                 return;
 
-            // 👉 Jetzt manuell DV Logik triggern
             CallDoDrag(__instance, collision);
             CallDoImpact(__instance, collision);
         }
 
-        // =============================
         private static bool IsGravelCollider(Collider col)
         {
             string path = GetFullPath(col.transform);
             return path.Contains("Near_Colliders_Gravel");
         }
 
-        // =============================
         private static void CallDoDrag(object instance, Collision collision)
         {
             MethodInfo method = typeof(DerailedParticles)
@@ -1382,7 +1364,6 @@ namespace PhysxSimulationRework
             method?.Invoke(instance, new object[] { collision });
         }
 
-        // =============================
         private static string GetFullPath(Transform t)
         {
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
@@ -1400,4 +1381,335 @@ namespace PhysxSimulationRework
             return sb.ToString();
         }
     }
+
+	// ======================================================
+	// BRAKE OVERHEATING DAMAGE
+	// ======================================================
+
+	[HarmonyPatch(typeof(BrakesOverheatingController), "Start")]
+	public static class BrakesOverheatingController_Start_Patch
+	{
+		static void Postfix(BrakesOverheatingController __instance)
+		{
+			if (__instance == null)
+				return;
+
+			var car = TrainCar.Resolve(__instance.gameObject);
+
+			if (car == null)
+				return;
+
+			if (car.GetComponent<OverheatDamageBehaviour>() != null)
+				return;
+
+			car.gameObject.AddComponent<OverheatDamageBehaviour>();
+
+			if (car.logicCar != null)
+			{
+				ModLog.Overheat(
+					$"[OverheatDamage] Attached to {car.ID}"
+				);
+			}
+		}
+	}
+	
+	// ======================================================
+	// OVERHEAT DAMAGE BEHAVIOUR
+	// ======================================================
+
+	public class OverheatDamageBehaviour : MonoBehaviour
+	{
+		private TrainCar? car;
+		private float timer;
+		private object? heatController;
+		private FieldInfo? temperatureField;
+
+		private void Awake()
+		{
+			car = GetComponent<TrainCar>();
+
+			if (car == null)
+				return;
+
+			try
+			{
+				// ------------------------------------------
+				// brakeSystem
+				// ------------------------------------------
+
+				var brakeSystemField = typeof(TrainCar)
+					.GetField(
+						"brakeSystem",
+						BindingFlags.Public |
+						BindingFlags.NonPublic |
+						BindingFlags.Instance
+					);
+
+				if (brakeSystemField == null)
+				{
+					Debug.LogError(
+						"[OverheatDamage] brakeSystem field NOT FOUND"
+					);
+					return;
+				}
+
+				object brakeSystem =
+					brakeSystemField.GetValue(car);
+
+				if (brakeSystem == null)
+					return;
+
+				// ------------------------------------------
+				// heatController
+				// ------------------------------------------
+
+				var hcField = brakeSystem.GetType()
+					.GetField(
+						"heatController",
+						BindingFlags.Public |
+						BindingFlags.NonPublic |
+						BindingFlags.Instance
+					);
+
+				if (hcField == null)
+				{
+					Debug.LogError("[OverheatDamage] heatController field NOT FOUND");
+					return;
+				}
+
+				heatController = hcField.GetValue(brakeSystem);
+
+				if (heatController == null)
+					return;
+
+				// ------------------------------------------
+				// temperature field
+				// ------------------------------------------
+
+				temperatureField = heatController.GetType()
+					.GetField(
+						"temperature",
+						BindingFlags.NonPublic |
+						BindingFlags.Public |
+						BindingFlags.Instance
+					);
+
+				if (car.logicCar != null)
+				{
+					ModLog.Overheat(
+						$"[OverheatDamage] Initialized for {car.ID}"
+					);
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.LogError(
+					$"[OverheatDamage] Init failed: {ex}"
+				);
+			}
+		}
+
+		private void Update()
+		{
+			if (car == null)
+				return;
+
+			if (car.CarDamage == null)
+				return;
+
+			if (heatController == null)
+				return;
+
+			if (temperatureField == null)
+			{
+				Debug.LogError(
+					"[OverheatDamage] temperature field NOT FOUND"
+				);
+				return;
+			}
+
+			float temp;
+
+			try
+			{
+				temp = (float)temperatureField.GetValue(heatController);
+			}
+			catch
+			{
+				return;
+			}
+
+			// DEBUG
+			if (Time.frameCount % 300 == 0 && temp >= 600f)
+			{
+				ModLog.Overheat(
+					$"[OverheatDamage] {car.ID} temp={temp:F0}"
+				);
+			}
+
+			// ------------------------------------------
+			// UNDER 600
+			// ------------------------------------------
+
+			if (temp < 600f)
+			{
+				timer = 0f;
+				return;
+			}
+
+			// ------------------------------------------
+			// TIMER
+			// ------------------------------------------
+
+			timer += Time.deltaTime;
+
+			float interval = 60f;
+			float damage = 1f;
+
+			if (temp >= 999f)
+			{
+				interval = 5f;
+				damage = 20f;
+			}
+			else if (temp >= 900f)
+			{
+				interval = 10f;
+				damage = 15f;
+			}
+			else if (temp >= 850f)
+			{
+				interval = 15f;
+				damage = 10f;
+			}
+			else if (temp >= 800f)
+			{
+				interval = 20f;
+				damage = 5f;
+			}
+			else if (temp >= 750f)
+			{
+				interval = 30f;
+				damage = 5f;
+			}
+			else if (temp >= 700f)
+			{
+				interval = 35f;
+				damage = 5f;
+			}
+			else if (temp >= 650f)
+			{
+				interval = 40f;
+				damage = 5f;
+			}
+
+			if (timer < interval)
+				return;
+
+			timer = 0f;
+			
+			// =====================================================
+			// SPEED MULTIPLIER
+			// =====================================================
+
+			float speedKmh = 0f;
+
+			try
+			{
+				if (car.rb != null)
+				{
+					speedKmh =
+						car.rb.velocity.magnitude * 3.6f;
+				}
+			}
+			catch
+			{
+				speedKmh = 0f;
+			}
+
+			float speedMultiplier = 1f;
+
+			if (speedKmh >= 90f)
+			{
+				speedMultiplier = 2.00f;
+			}
+			else if (speedKmh >= 80f)
+			{
+				speedMultiplier = 1.85f;
+			}
+			else if (speedKmh >= 70f)
+			{
+				speedMultiplier = 1.70f;
+			}
+			else if (speedKmh >= 60f)
+			{
+				speedMultiplier = 1.55f;
+			}
+			else if (speedKmh >= 50f)
+			{
+				speedMultiplier = 1.40f;
+			}
+			else if (speedKmh >= 40f)
+			{
+				speedMultiplier = 1.25f;
+			}
+			else if (speedKmh >= 30f)
+			{
+				speedMultiplier = 1.10f;
+			}
+
+			// APPLY MULTIPLIER
+			damage *= speedMultiplier;
+
+			// ------------------------------------------
+			// APPLY DAMAGE
+			// ------------------------------------------
+
+			try
+			{
+				var method = car.CarDamage.GetType()
+					.GetMethod(
+						"DamageCar",
+						BindingFlags.Public |
+						BindingFlags.NonPublic |
+						BindingFlags.Instance
+					);
+
+				if (method == null)
+				{
+					Debug.LogError(
+						"[OverheatDamage] DamageCar method NOT FOUND"
+					);
+					return;
+				}
+
+				// ------------------------------------------------
+				// APPLY REAL DAMAGE
+				// ------------------------------------------------
+
+				method.Invoke(
+					car.CarDamage,
+					new object[]
+					{
+						damage,
+						true
+					}
+				); 
+
+				ModLog.Overheat(
+					$"[OverheatDamage] DAMAGE APPLIED " +
+					$"| Car={car.ID} " +
+					$"| Temp={temp:F0} " +
+					$"| Speed={speedKmh:F0} km/h " +
+					$"| SpeedMulti={speedMultiplier:F2} " +
+					$"| Damage={(damage / 10000f):P2}"
+				);
+			}
+			catch (Exception ex)
+			{
+				Debug.LogError(
+					$"[OverheatDamage] Apply failed: {ex}"
+				);
+			}
+		}
+	}
 }

@@ -79,6 +79,22 @@ namespace PhysxSimulationRework
 		}
 
 		// -------------------------
+		// Overheat
+		// -------------------------
+		internal static void Overheat(string msg)
+		{
+			Log(S != null && S.enableOverheatLog, "Overheat", msg);
+		}
+
+		// -------------------------
+		// Risk
+		// -------------------------
+		internal static void Risk(string msg)
+		{
+			Log(S != null && S.enableRiskLog, "Risk", msg);
+		}
+
+		// -------------------------
 		// Coupler / PhysX
 		// -------------------------
 		internal static void Coupler(string msg)
