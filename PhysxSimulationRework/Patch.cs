@@ -10,9 +10,10 @@ using DV.Simulation;
 using DV.Simulation.Brake;
 using DV.CabControls;
 using DV.Simulation.Cars;
+using DV.Wheels;
 using DV.VFX;
-//using DV.ModularAudioCar;
-//using DV.Damage;
+using DV.ModularAudioCar;
+using DV.Damage;
 
 namespace PhysxSimulationRework
 {
@@ -695,11 +696,11 @@ namespace PhysxSimulationRework
 				if (cj == null)
 					continue;
 
-				cj.breakForce = 5000f;
-				cj.breakTorque = 5000f;
+				cj.breakForce = 2500f;
+				cj.breakTorque = 2500f;
 
 				ModLog.Derail(
-					$"[PhysxSimulationRework][PhysX] Coupler weakened by derailment " +
+					$"[PhysxSimulationRework] Coupler weakened by derailment " +
 					$"| CarID={__instance.ID} | State={coupler.state}"
 				);
 			}
@@ -1406,8 +1407,8 @@ namespace PhysxSimulationRework
 
 			if (car.logicCar != null)
 			{
-				ModLog.Overheat(
-					$"[OverheatDamage] Attached to {car.ID}"
+				ModLog.Wheel(
+					$"Attached to {car.ID}"
 				);
 			}
 		}
@@ -1418,7 +1419,7 @@ namespace PhysxSimulationRework
 	// ======================================================
 
 	public class OverheatDamageBehaviour : MonoBehaviour
-	{
+	{		
 		private TrainCar? car;
 		private float timer;
 		private object? heatController;
@@ -1448,7 +1449,7 @@ namespace PhysxSimulationRework
 				if (brakeSystemField == null)
 				{
 					Debug.LogError(
-						"[OverheatDamage] brakeSystem field NOT FOUND"
+						" brakeSystem field NOT FOUND"
 					);
 					return;
 				}
@@ -1473,7 +1474,7 @@ namespace PhysxSimulationRework
 
 				if (hcField == null)
 				{
-					Debug.LogError("[OverheatDamage] heatController field NOT FOUND");
+					Debug.LogError(" heatController field NOT FOUND");
 					return;
 				}
 
@@ -1496,21 +1497,32 @@ namespace PhysxSimulationRework
 
 				if (car.logicCar != null)
 				{
-					ModLog.Overheat(
-						$"[OverheatDamage] Initialized for {car.ID}"
+					ModLog.Wheel(
+						$"Initialized for {car.ID}"
 					);
 				}
 			}
 			catch (Exception ex)
 			{
 				Debug.LogError(
-					$"[OverheatDamage] Init failed: {ex}"
+					$"Init failed: {ex}"
 				);
 			}
 		}
 
 		private void Update()
-		{
+		{			
+			var settings = Main.Settings;
+
+			if (settings == null)
+				return;
+
+			if (!settings.enableWheelDamage)
+				return;
+
+			if (!settings.enableBrakeOverheatDamage)
+				return;
+		
 			if (car == null)
 				return;
 
@@ -1523,7 +1535,7 @@ namespace PhysxSimulationRework
 			if (temperatureField == null)
 			{
 				Debug.LogError(
-					"[OverheatDamage] temperature field NOT FOUND"
+					" temperature field NOT FOUND"
 				);
 				return;
 			}
@@ -1542,8 +1554,8 @@ namespace PhysxSimulationRework
 			// DEBUG
 			if (Time.frameCount % 300 == 0 && temp >= 600f)
 			{
-				ModLog.Overheat(
-					$"[OverheatDamage] {car.ID} temp={temp:F0}"
+				ModLog.Wheel(
+					$"{car.ID} temp={temp:F0}"
 				);
 			}
 
@@ -1677,7 +1689,7 @@ namespace PhysxSimulationRework
 				if (method == null)
 				{
 					Debug.LogError(
-						"[OverheatDamage] DamageCar method NOT FOUND"
+						"DamageCar method NOT FOUND"
 					);
 					return;
 				}
@@ -1695,8 +1707,8 @@ namespace PhysxSimulationRework
 					}
 				); 
 
-				ModLog.Overheat(
-					$"[OverheatDamage] DAMAGE APPLIED " +
+				ModLog.Wheel(
+					$"DAMAGE APPLIED " +
 					$"| Car={car.ID} " +
 					$"| Temp={temp:F0} " +
 					$"| Speed={speedKmh:F0} km/h " +
@@ -1707,9 +1719,710 @@ namespace PhysxSimulationRework
 			catch (Exception ex)
 			{
 				Debug.LogError(
-					$"[OverheatDamage] Apply failed: {ex}"
+					$"Apply failed: {ex}"
 				);
 			}
 		}
 	}
+	
+	// ======================================================
+	// WHEELSLIP DAMAGE
+	// ======================================================
+
+	[HarmonyPatch(typeof(WheelSlideSparksController), "Start")]
+	public static class WheelSlideDamagePatch
+	{
+		static void Postfix(WheelSlideSparksController __instance)
+		{
+			if (__instance == null)
+				return;
+
+			var car = TrainCar.Resolve(__instance.gameObject);
+
+			if (car == null)
+				return;
+
+			if (car.GetComponent<WheelSlideDamageBehaviour>() != null)
+				return;
+
+			car.gameObject.AddComponent<WheelSlideDamageBehaviour>();
+		}
+	}
+	
+	// ======================================================
+	// WHEELSLIP DAMAGE BEHAVIOUR
+	// ======================================================
+
+	public class WheelSlideDamageBehaviour : MonoBehaviour
+	{
+		private TrainCar? car;
+
+		private float timer;
+
+		private void Awake()
+		{
+			car = GetComponent<TrainCar>();
+		}
+
+		private void Update()
+		{
+			var settings = Main.Settings;
+
+			if (settings == null)
+				return;
+
+			if (!settings.enableWheelDamage)
+				return;
+
+			if (!settings.enableWheelslideDamage)
+				return;
+			
+			if (car == null)
+				return;
+
+			if (car.CarDamage == null)
+				return;
+
+			if (car.adhesionController == null)
+				return;
+
+			// =====================================================
+			// REAL WHEEL SLIDE
+			// =====================================================
+
+			bool wheelSliding =
+				car.adhesionController.wheelSlide > 0.05f;
+
+			if (!wheelSliding)
+			{
+				timer = 0f;
+				return;
+			}
+
+			// =====================================================
+			// TIMER
+			// =====================================================
+
+			timer += Time.deltaTime;
+
+			if (timer < 5f)
+				return;
+
+			timer = 0f;
+
+			// =====================================================
+			// DAMAGE
+			// =====================================================
+
+			float damage = 50f;
+
+			damage *= Mathf.Lerp(
+				1f,
+				3f,
+				car.adhesionController.wheelSlide
+			);
+			
+			// =====================================================
+			// SPEED MULTIPLIER
+			// =====================================================
+
+			float speedKmh = 0f;
+
+			try
+			{
+				if (car.rb != null)
+				{
+					speedKmh =
+						car.rb.velocity.magnitude * 3.6f;
+				}
+			}
+			catch
+			{
+				speedKmh = 0f;
+			}
+
+			float speedMultiplier = 1f;
+
+			if (speedKmh >= 90f)
+			{
+				speedMultiplier = 2.00f;
+			}
+			else if (speedKmh >= 80f)
+			{
+				speedMultiplier = 1.85f;
+			}
+			else if (speedKmh >= 70f)
+			{
+				speedMultiplier = 1.70f;
+			}
+			else if (speedKmh >= 60f)
+			{
+				speedMultiplier = 1.55f;
+			}
+			else if (speedKmh >= 50f)
+			{
+				speedMultiplier = 1.40f;
+			}
+			else if (speedKmh >= 40f)
+			{
+				speedMultiplier = 1.25f;
+			}
+			else if (speedKmh >= 30f)
+			{
+				speedMultiplier = 1.10f;
+			}
+
+			// APPLY SPEED MULTI
+			damage *= speedMultiplier;
+
+			try
+			{
+				var method = car.CarDamage.GetType()
+					.GetMethod(
+						"DamageCar",
+						BindingFlags.Public |
+						BindingFlags.NonPublic |
+						BindingFlags.Instance
+					);
+
+				if (method == null)
+					return;
+
+				method.Invoke(
+					car.CarDamage,
+					new object[]
+					{
+						damage,
+						true
+					}
+				);
+
+				ModLog.Wheel(
+					$"DAMAGE APPLIED " +
+					$"| Car={car.ID} " +
+					$"| Slide={car.adhesionController.wheelSlide:F2} " +
+					$"| Damage={(damage / 10000f):P2}"
+				);
+			}
+			catch (Exception ex)
+			{
+				Debug.LogError(
+					$"Apply failed: {ex}"
+				);
+			}
+		}
+	}
+	
+	// ======================================================
+	// FREIGHT FLATSPOT AUDIO
+	// ======================================================
+
+	[HarmonyPatch(typeof(TrainComponentPool), "RequestTrainAudioFromPool")]
+	public static class FreightFlatspotAudioPatch
+	{
+		private static AudioClip? damagedSlow;
+
+		private static AudioClip? damagedFast;
+
+		static void Postfix(
+			TrainCar car,
+			TrainAudio __result)
+		{
+			try
+			{
+				if (car == null)
+					return;
+
+				if (car.IsLoco)
+					return;
+
+				if (__result == null)
+					return;
+
+				if (car.GetComponent<FreightFlatspotAudioBehaviour>() != null)
+					return;
+
+				// ------------------------------------------------
+				// FIND CLIPS
+				// ------------------------------------------------
+
+				if (damagedSlow == null ||
+					damagedFast == null)
+				{
+					var clips =
+						Resources.FindObjectsOfTypeAll<AudioClip>();
+
+					foreach (var clip in clips)
+					{
+						if (clip == null)
+							continue;
+
+						if (clip.name == "Wheels_DamagedSlow_01")
+						{
+							damagedSlow = clip;
+
+							Debug.Log(
+								"[Flatspot] Found Wheels_DamagedSlow_01"
+							);
+						}
+
+						if (clip.name == "Wheels_DamagedFast_01")
+						{
+							damagedFast = clip;
+
+							Debug.Log(
+								"[Flatspot] Found Wheels_DamagedFast_01"
+							);
+						}
+					}
+				}
+
+				var behaviour =
+					car.gameObject.AddComponent<
+						FreightFlatspotAudioBehaviour>();
+
+				behaviour.Initialize(
+					car,
+					damagedSlow,
+					damagedFast
+				);
+
+				Debug.Log(
+					$"[Flatspot] Added to {car.ID}"
+				);
+			}
+			catch (Exception ex)
+			{
+				Debug.LogError(
+					$"[Flatspot] Failed: {ex}"
+				);
+			}
+		}
+	}
+
+	// ======================================================
+	// BEHAVIOUR
+	// ======================================================
+
+	public class FreightFlatspotAudioBehaviour : MonoBehaviour
+	{
+		private TrainCar? car;
+
+		private AudioSource? frontSlowSource;
+		private AudioSource? frontFastSource;
+
+		private AudioSource? rearSlowSource;
+		private AudioSource? rearFastSource;
+		
+		private const float WHEEL_RADIUS = 0.7f;
+
+		public void Initialize(TrainCar trainCar,AudioClip? slowClip,AudioClip? fastClip)
+		{
+			car = trainCar;
+
+			// =====================================================
+			// FRONT / REAR PARENTS
+			// =====================================================
+
+			Transform frontParent =
+				trainCar.FrontBogie != null
+					? trainCar.FrontBogie.transform
+					: trainCar.transform;
+
+			Transform rearParent =
+				trainCar.RearBogie != null
+					? trainCar.RearBogie.transform
+					: trainCar.transform;
+
+			// =====================================================
+			// FRONT BOGIE
+			// =====================================================
+
+			if (slowClip != null)
+			{
+				frontSlowSource =
+					frontParent.gameObject.AddComponent<AudioSource>();
+
+				frontSlowSource.clip = slowClip;
+				frontSlowSource.loop = true;
+				frontSlowSource.playOnAwake = false;
+
+				Setup3DAudio(frontSlowSource);
+			}
+
+			if (fastClip != null)
+			{
+				frontFastSource =
+					frontParent.gameObject.AddComponent<AudioSource>();
+
+				frontFastSource.clip = fastClip;
+				frontFastSource.loop = true;
+				frontFastSource.playOnAwake = false;
+
+				Setup3DAudio(frontFastSource);
+			}
+
+			// =====================================================
+			// REAR BOGIE
+			// =====================================================
+
+			if (slowClip != null)
+			{
+				rearSlowSource =
+					rearParent.gameObject.AddComponent<AudioSource>();
+
+				rearSlowSource.clip = slowClip;
+				rearSlowSource.loop = true;
+				rearSlowSource.playOnAwake = false;
+
+				Setup3DAudio(rearSlowSource);
+			}
+
+			if (fastClip != null)
+			{
+				rearFastSource =
+					rearParent.gameObject.AddComponent<AudioSource>();
+
+				rearFastSource.clip = fastClip;
+				rearFastSource.loop = true;
+				rearFastSource.playOnAwake = false;
+
+				Setup3DAudio(rearFastSource);
+			}
+		}
+		private void Setup3DAudio(AudioSource src)
+		{
+			src.spatialBlend = 1f;
+			src.priority = 32;
+
+			src.rolloffMode =
+				AudioRolloffMode.Logarithmic;
+
+			src.minDistance = 8f;
+			src.maxDistance = 120f;
+
+			src.dopplerLevel = 0.3f;
+			
+			src.ignoreListenerPause = true;
+		}
+
+		private void Update()
+		{
+			if (car == null)
+				return;
+			
+			if (car.derailed)
+			{
+				StopAudio();
+				return;
+			}
+
+			if (car.CarDamage == null)
+				return;
+
+			float damage =
+				car.CarDamage.DamagePercentage;
+
+			float speed =
+				car.rb != null
+					? car.rb.velocity.magnitude
+					: 0f;
+
+			float speedKmh = speed * 3.6f;
+
+			// =====================================================
+			// REAL WHEEL ROTATION
+			// =====================================================
+
+			float wheelCircumference =
+				2f * Mathf.PI * WHEEL_RADIUS;
+
+			float rps =
+				speed / wheelCircumference;
+
+			// =====================================================
+			// NO FLATSPOTS WHILE WHEELSLIDING
+			// =====================================================
+
+			if (car.adhesionController != null)
+			{
+				float slide =
+					car.adhesionController.wheelSlide;
+
+				// -------------------------------------------------
+				// blocked wheel = no rolling flatspot sound
+				// -------------------------------------------------
+
+				if (slide > 0.01f)
+				{
+					StopAudio();
+					return;
+				}
+			}      
+
+			// ------------------------------------------------
+			// STOP CONDITIONS
+			// ------------------------------------------------
+
+			if (damage < 0.10f ||
+				speedKmh < 5f)
+			{
+				StopAudio();
+				return;
+			}
+
+			// ------------------------------------------------
+			// DAMAGE VOLUME
+			// ------------------------------------------------
+
+			float volume =
+				Mathf.Lerp(
+					0f,
+					1f,
+					damage
+				);
+
+			// =====================================================
+			// WOBBLE
+			// =====================================================
+
+			float wobble =
+				Mathf.PerlinNoise(
+					Time.time * 0.35f,
+					0f
+				);
+
+			float wobblePitch =
+				Mathf.Lerp(
+					0.98f,
+					1.02f,
+					wobble
+				);
+
+			// =====================================================
+			// BASE PITCH
+			// =====================================================
+
+			float slowPitch =
+				Mathf.Clamp(
+					rps * 0.9f,
+					0.5f,
+					2.5f
+				);
+
+			slowPitch *= wobblePitch;
+
+			float fastPitch =
+				Mathf.Clamp(
+					rps * 1.1f,
+					0.7f,
+					3f
+				);
+
+			fastPitch *= wobblePitch;
+
+			// =====================================================
+			// FAST FACTOR
+			// =====================================================
+
+			float fastFactor =
+				Mathf.InverseLerp(
+					40f,
+					120f,
+					speedKmh
+				);
+
+			// =====================================================
+			// FRONT SLOW
+			// =====================================================
+
+			if (frontSlowSource != null)
+			{
+				frontSlowSource.volume =
+					volume * 1.4f;
+
+				frontSlowSource.pitch =
+					slowPitch * 0.99f;
+
+				if (!frontSlowSource.isPlaying)
+				{
+					frontSlowSource.Play();
+				}
+			}
+
+			// =====================================================
+			// REAR SLOW
+			// =====================================================
+
+			if (rearSlowSource != null)
+			{
+				rearSlowSource.volume =
+					volume * 1.5f;
+
+				rearSlowSource.pitch =
+					slowPitch * 1.01f;
+
+				if (!rearSlowSource.isPlaying)
+				{
+					rearSlowSource.Play();
+				}
+			}
+
+			// =====================================================
+			// FRONT FAST
+			// =====================================================
+
+			if (frontFastSource != null)
+			{
+				frontFastSource.volume =
+					volume *
+					fastFactor *
+					1.8f;
+
+				frontFastSource.pitch =
+					fastPitch * 0.99f;
+
+				if (!frontFastSource.isPlaying)
+				{
+					frontFastSource.Play();
+				}
+			}
+
+			// =====================================================
+			// REAR FAST
+			// =====================================================
+
+			if (rearFastSource != null)
+			{
+				rearFastSource.volume =
+					volume *
+					fastFactor *
+					2.0f;
+
+				rearFastSource.pitch =
+					fastPitch * 1.01f;
+
+				if (!rearFastSource.isPlaying)
+				{
+					rearFastSource.Play();
+				}
+			}
+		}
+
+		private void StopAudio()
+		{
+			if (frontSlowSource != null &&
+				frontSlowSource.isPlaying)
+			{
+				frontSlowSource.Stop();
+			}
+
+			if (rearSlowSource != null &&
+				rearSlowSource.isPlaying)
+			{
+				rearSlowSource.Stop();
+			}
+
+			if (frontFastSource != null &&
+				frontFastSource.isPlaying)
+			{
+				frontFastSource.Stop();
+			}
+
+			if (rearFastSource != null &&
+				rearFastSource.isPlaying)
+			{
+				rearFastSource.Stop();
+			}
+		}
+	}
+	/*
+	[HarmonyPatch(typeof(TrainComponentPool), "RequestTrainAudioFromPool")]
+	public static class FreightAudioDebugPatch
+	{
+		static void Postfix(
+			TrainCar car,
+			TrainAudio __result)
+		{
+			try
+			{
+				if (car == null)
+					return;
+
+				if (car.IsLoco)
+					return;
+
+				Debug.Log(
+					$"[XXXXXXXXXXXXXXXXXXXXXXXXXXXX] " +
+					$"Car={car.ID}"
+				);
+
+				if (__result == null)
+				{
+					Debug.Log(
+						$"[XXXXXXXXXXXXXXXXXXXXXXXXXXXX] TrainAudio NULL"
+					);
+					return;
+				}
+
+				// ------------------------------------------------
+				// LIST ALL MODULES
+				// ------------------------------------------------
+
+				var modules =
+					__result.GetComponentsInChildren<
+						CarAudioModule>(true);
+
+				Debug.Log(
+					$"[XXXXXXXXXXXXXXXXXXXXXXXXXXXX] Modules={modules.Length}"
+				);
+
+				foreach (var module in modules)
+				{
+					if (module == null)
+						continue;
+
+					Debug.Log(
+						$"[XXXXXXXXXXXXXXXXXXXXXXXXXXXX] -> " +
+						module.GetType().FullName
+					);
+				}
+
+				// ------------------------------------------------
+				// LIST AUDIOSOURCES
+				// ------------------------------------------------
+
+				var sources =
+					__result.GetComponentsInChildren<
+						AudioSource>(true);
+
+				Debug.Log(
+					$"[XXXXXXXXXXXXXXXXXXXXXXXXXXXX] AudioSources={sources.Length}"
+				);
+
+				foreach (var src in sources)
+				{
+					if (src == null)
+						continue;
+
+					string clip =
+						src.clip != null
+							? src.clip.name
+							: "<null>";
+
+					Debug.Log(
+						$"[XXXXXXXXXXXXXXXXXXXXXXXXXXXX] SOURCE -> " +
+						$"{src.name} " +
+						$"| Clip={clip}"
+					);
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.LogError(
+					$"[XXXXXXXXXXXXXXXXXXXXXXXXXXXX] Failed: {ex}"
+				);
+			}
+		}
+	}*/
 }

@@ -45,7 +45,9 @@ namespace PhysxSimulationRework
 		public float riskDecreaseOnFail = 0.25f;
 		public float riskThreshold = 3f;
 		
+		public bool enableWheelDamage = true;
 		public bool enableBrakeOverheatDamage = true;
+		public bool enableWheelslideDamage = true;
 		
 		//DEBUG
 		public bool enableDerailDebug = false;
@@ -53,7 +55,7 @@ namespace PhysxSimulationRework
 		public bool enableTurntableLog = false;
 		public bool enableBrakepipeLog = false;
 		public bool enableDerailLog = false;
-		public bool enableOverheatLog = false;
+		public bool enableWheelLog = false;
 		public bool enableRiskLog = false;
 		public bool enableCouplerLog = false;
 
@@ -492,17 +494,41 @@ namespace PhysxSimulationRework
 			GUILayout.EndVertical();
 			Space(2);
 			// ----------------------------------------
-			// OVERHEAT DAMAGE
+			// WHEEL DAMAGE
 			// ----------------------------------------
 			GUILayout.BeginVertical(GUI.skin.box);
 
-			Label("<b>Brake Overheating:</b>");
+			Label("<b>Wheel Damage Settings:</b>");
 			Space(5);
 
 			// =========================
 			// ENABLE TOGGLE
 			// =========================
-			enableBrakeOverheatDamage = GUILayout.Toggle(enableBrakeOverheatDamage,"Enable brake overheat damage"); 			
+			enableWheelDamage = Toggle(enableWheelDamage,"Enable Wheel Damage System");
+
+			if (!enableWheelDamage)
+			{
+				enableBrakeOverheatDamage = false;
+				enableWheelslideDamage = false;
+			}
+			
+			if (enableWheelDamage)
+			{
+				Space(5);
+				enableBrakeOverheatDamage = GUILayout.Toggle(enableBrakeOverheatDamage,"Enable brake overheat damage"); 	
+
+				Label("<i>(Brake overheating causes increasing damage at higher speeds.)</i>", new GUIStyle(GUI.skin.label)
+				{
+					richText = true
+				});				
+				Space(5);
+				enableWheelslideDamage = GUILayout.Toggle(enableWheelslideDamage,"Enable Wheelslide damage"); 	
+
+				Label("<i>(Blocked wheels take severe damage at high speeds.)</i>", new GUIStyle(GUI.skin.label)
+				{
+					richText = true
+				});	
+			}		
 			Space(5);
 			GUILayout.EndVertical();
 			Space(2);

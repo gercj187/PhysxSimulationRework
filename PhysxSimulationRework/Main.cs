@@ -79,11 +79,11 @@ namespace PhysxSimulationRework
 		}
 
 		// -------------------------
-		// Overheat
+		// Wheel
 		// -------------------------
-		internal static void Overheat(string msg)
+		internal static void Wheel(string msg)
 		{
-			Log(S != null && S.enableOverheatLog, "Overheat", msg);
+			Log(S != null && S.enableWheelLog, "Wheel", msg);
 		}
 
 		// -------------------------
