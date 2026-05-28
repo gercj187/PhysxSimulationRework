@@ -1911,431 +1911,327 @@ namespace PhysxSimulationRework
 				);
 			}
 		}
-	}
-	
-	// ======================================================
-	// FREIGHT FLATSPOT AUDIO
-	// ======================================================
+	}// ======================================================
+// FREIGHT FLATSPOT AUDIO
+// ======================================================
 
-	[HarmonyPatch(typeof(TrainComponentPool), "RequestTrainAudioFromPool")]
-	public static class FreightFlatspotAudioPatch
+[HarmonyPatch(typeof(TrainComponentPool), "RequestTrainAudioFromPool")]
+public static class FreightFlatspotAudioPatch
+{
+	private static AudioClip? damagedSlow;
+
+	static void Postfix(
+		TrainCar car,
+		TrainAudio __result)
 	{
-		private static AudioClip? damagedSlow;
-
-		private static AudioClip? damagedFast;
-
-		static void Postfix(
-			TrainCar car,
-			TrainAudio __result)
-		{
-			try
-			{
-				if (car == null)
-					return;
-
-				if (car.IsLoco)
-					return;
-
-				if (__result == null)
-					return;
-
-				if (car.GetComponent<FreightFlatspotAudioBehaviour>() != null)
-					return;
-
-				// ------------------------------------------------
-				// FIND CLIPS
-				// ------------------------------------------------
-
-				if (damagedSlow == null ||
-					damagedFast == null)
-				{
-					var clips =
-						Resources.FindObjectsOfTypeAll<AudioClip>();
-
-					foreach (var clip in clips)
-					{
-						if (clip == null)
-							continue;
-
-						if (clip.name == "Wheels_DamagedSlow_01")
-						{
-							damagedSlow = clip;
-
-							Debug.Log(
-								"[Flatspot] Found Wheels_DamagedSlow_01"
-							);
-						}
-
-						if (clip.name == "Wheels_DamagedFast_01")
-						{
-							damagedFast = clip;
-
-							Debug.Log(
-								"[Flatspot] Found Wheels_DamagedFast_01"
-							);
-						}
-					}
-				}
-
-				var behaviour =
-					car.gameObject.AddComponent<
-						FreightFlatspotAudioBehaviour>();
-
-				behaviour.Initialize(
-					car,
-					damagedSlow,
-					damagedFast
-				);
-
-				Debug.Log(
-					$"[Flatspot] Added to {car.ID}"
-				);
-			}
-			catch (Exception ex)
-			{
-				Debug.LogError(
-					$"[Flatspot] Failed: {ex}"
-				);
-			}
-		}
-	}
-
-	// ======================================================
-	// BEHAVIOUR
-	// ======================================================
-
-	public class FreightFlatspotAudioBehaviour : MonoBehaviour
-	{
-		private TrainCar? car;
-
-		private AudioSource? frontSlowSource;
-		private AudioSource? frontFastSource;
-
-		private AudioSource? rearSlowSource;
-		private AudioSource? rearFastSource;
-		
-		private const float WHEEL_RADIUS = 0.7f;
-
-		public void Initialize(TrainCar trainCar,AudioClip? slowClip,AudioClip? fastClip)
-		{
-			car = trainCar;
-
-			// =====================================================
-			// FRONT / REAR PARENTS
-			// =====================================================
-
-			Transform frontParent =
-				trainCar.FrontBogie != null
-					? trainCar.FrontBogie.transform
-					: trainCar.transform;
-
-			Transform rearParent =
-				trainCar.RearBogie != null
-					? trainCar.RearBogie.transform
-					: trainCar.transform;
-
-			// =====================================================
-			// FRONT BOGIE
-			// =====================================================
-
-			if (slowClip != null)
-			{
-				frontSlowSource =
-					frontParent.gameObject.AddComponent<AudioSource>();
-
-				frontSlowSource.clip = slowClip;
-				frontSlowSource.loop = true;
-				frontSlowSource.playOnAwake = false;
-
-				Setup3DAudio(frontSlowSource);
-			}
-
-			if (fastClip != null)
-			{
-				frontFastSource =
-					frontParent.gameObject.AddComponent<AudioSource>();
-
-				frontFastSource.clip = fastClip;
-				frontFastSource.loop = true;
-				frontFastSource.playOnAwake = false;
-
-				Setup3DAudio(frontFastSource);
-			}
-
-			// =====================================================
-			// REAR BOGIE
-			// =====================================================
-
-			if (slowClip != null)
-			{
-				rearSlowSource =
-					rearParent.gameObject.AddComponent<AudioSource>();
-
-				rearSlowSource.clip = slowClip;
-				rearSlowSource.loop = true;
-				rearSlowSource.playOnAwake = false;
-
-				Setup3DAudio(rearSlowSource);
-			}
-
-			if (fastClip != null)
-			{
-				rearFastSource =
-					rearParent.gameObject.AddComponent<AudioSource>();
-
-				rearFastSource.clip = fastClip;
-				rearFastSource.loop = true;
-				rearFastSource.playOnAwake = false;
-
-				Setup3DAudio(rearFastSource);
-			}
-		}
-		private void Setup3DAudio(AudioSource src)
-		{
-			src.spatialBlend = 1f;
-			src.priority = 32;
-
-			src.rolloffMode =
-				AudioRolloffMode.Logarithmic;
-
-			src.minDistance = 8f;
-			src.maxDistance = 120f;
-
-			src.dopplerLevel = 0.3f;
-			
-			src.ignoreListenerPause = true;
-		}
-
-		private void Update()
+		try
 		{
 			if (car == null)
 				return;
-			
-			if (car.derailed)
+
+			if (car.IsLoco)
+				return;
+
+			if (__result == null)
+				return;
+
+			if (car.GetComponent<FreightFlatspotAudioBehaviour>() != null)
+				return;
+
+			// ------------------------------------------------
+			// FIND CLIP
+			// ------------------------------------------------
+
+			if (damagedSlow == null)
+			{
+				var clips =
+					Resources.FindObjectsOfTypeAll<AudioClip>();
+
+				foreach (var clip in clips)
+				{
+					if (clip == null)
+						continue;
+
+					if (clip.name == "Wheels_DamagedSlow_01")
+					{
+						damagedSlow = clip;
+
+						Debug.Log(
+							"[Flatspot] Found Wheels_DamagedSlow_01"
+						);
+
+						break;
+					}
+				}
+			}
+
+			var behaviour =
+				car.gameObject.AddComponent<
+					FreightFlatspotAudioBehaviour>();
+
+			behaviour.Initialize(
+				car,
+				damagedSlow
+			);
+
+			Debug.Log(
+				$"[Flatspot] Added to {car.ID}"
+			);
+		}
+		catch (Exception ex)
+		{
+			Debug.LogError(
+				$"[Flatspot] Failed: {ex}"
+			);
+		}
+	}
+}
+
+// ======================================================
+// BEHAVIOUR
+// ======================================================
+
+public class FreightFlatspotAudioBehaviour : MonoBehaviour
+{
+	private TrainCar? car;
+
+	private AudioSource? frontSource;
+	private AudioSource? rearSource;
+
+	private const float WHEEL_RADIUS = 0.7f;
+
+	public void Initialize(
+		TrainCar trainCar,
+		AudioClip? slowClip)
+	{
+		car = trainCar;
+
+		// =====================================================
+		// FRONT / REAR PARENTS
+		// =====================================================
+
+		Transform frontParent =
+			trainCar.FrontBogie != null
+				? trainCar.FrontBogie.transform
+				: trainCar.transform;
+
+		Transform rearParent =
+			trainCar.RearBogie != null
+				? trainCar.RearBogie.transform
+				: trainCar.transform;
+
+		// =====================================================
+		// FRONT BOGIE
+		// =====================================================
+
+		if (slowClip != null)
+		{
+			frontSource =
+				frontParent.gameObject.AddComponent<AudioSource>();
+
+			frontSource.clip = slowClip;
+			frontSource.loop = true;
+			frontSource.playOnAwake = false;
+
+			Setup3DAudio(frontSource);
+		}
+
+		// =====================================================
+		// REAR BOGIE
+		// =====================================================
+
+		if (slowClip != null)
+		{
+			rearSource =
+				rearParent.gameObject.AddComponent<AudioSource>();
+
+			rearSource.clip = slowClip;
+			rearSource.loop = true;
+			rearSource.playOnAwake = false;
+
+			Setup3DAudio(rearSource);
+		}
+	}
+
+	private void Setup3DAudio(AudioSource src)
+	{
+		src.spatialBlend = 1f;
+		src.spread = 25f;
+		src.priority = 128;
+		
+		if (SingletonBehaviour<AudioManager>.Instance != null && SingletonBehaviour<AudioManager>.Instance.railWheelGroup != null)
+		{
+			src.outputAudioMixerGroup =	SingletonBehaviour<AudioManager>.Instance.railWheelGroup;
+		}
+
+		src.rolloffMode = AudioRolloffMode.Logarithmic;
+
+		src.minDistance = 8f;
+		src.maxDistance = 100f;
+
+		src.dopplerLevel = 0.3f;
+
+		src.ignoreListenerPause = true;
+	}
+
+	private void Update()
+	{
+		if (car == null)
+			return;
+
+		if (car.derailed)
+		{
+			StopAudio();
+			return;
+		}
+
+		if (car.CarDamage == null)
+			return;
+
+		float damage =
+			car.CarDamage.DamagePercentage;
+
+		float speed =
+			car.rb != null
+				? car.rb.velocity.magnitude
+				: 0f;
+
+		float speedKmh = speed * 3.6f;
+
+		// =====================================================
+		// REAL WHEEL ROTATION
+		// =====================================================
+
+		float wheelCircumference =
+			2f * Mathf.PI * WHEEL_RADIUS;
+
+		float rps =
+			speed / wheelCircumference;
+
+		// =====================================================
+		// NO FLATSPOTS WHILE WHEELSLIDING
+		// =====================================================
+
+		if (car.adhesionController != null)
+		{
+			float slide =
+				car.adhesionController.wheelSlide;
+
+			// -------------------------------------------------
+			// blocked wheel = no rolling flatspot sound
+			// -------------------------------------------------
+
+			if (slide > 0.01f)
 			{
 				StopAudio();
 				return;
-			}
-
-			if (car.CarDamage == null)
-				return;
-
-			float damage =
-				car.CarDamage.DamagePercentage;
-
-			float speed =
-				car.rb != null
-					? car.rb.velocity.magnitude
-					: 0f;
-
-			float speedKmh = speed * 3.6f;
-
-			// =====================================================
-			// REAL WHEEL ROTATION
-			// =====================================================
-
-			float wheelCircumference =
-				2f * Mathf.PI * WHEEL_RADIUS;
-
-			float rps =
-				speed / wheelCircumference;
-
-			// =====================================================
-			// NO FLATSPOTS WHILE WHEELSLIDING
-			// =====================================================
-
-			if (car.adhesionController != null)
-			{
-				float slide =
-					car.adhesionController.wheelSlide;
-
-				// -------------------------------------------------
-				// blocked wheel = no rolling flatspot sound
-				// -------------------------------------------------
-
-				if (slide > 0.01f)
-				{
-					StopAudio();
-					return;
-				}
-			}      
-
-			// ------------------------------------------------
-			// STOP CONDITIONS
-			// ------------------------------------------------
-
-			if (damage < 0.10f ||
-				speedKmh < 5f)
-			{
-				StopAudio();
-				return;
-			}
-
-			// ------------------------------------------------
-			// DAMAGE VOLUME
-			// ------------------------------------------------
-
-			float volume =
-				Mathf.Lerp(
-					0f,
-					1f,
-					damage
-				);
-
-			// =====================================================
-			// WOBBLE
-			// =====================================================
-
-			float wobble =
-				Mathf.PerlinNoise(
-					Time.time * 0.35f,
-					0f
-				);
-
-			float wobblePitch =
-				Mathf.Lerp(
-					0.98f,
-					1.02f,
-					wobble
-				);
-
-			// =====================================================
-			// BASE PITCH
-			// =====================================================
-
-			float slowPitch =
-				Mathf.Clamp(
-					rps * 0.9f,
-					0.5f,
-					2.5f
-				);
-
-			slowPitch *= wobblePitch;
-
-			float fastPitch =
-				Mathf.Clamp(
-					rps * 1.1f,
-					0.7f,
-					3f
-				);
-
-			fastPitch *= wobblePitch;
-
-			// =====================================================
-			// FAST FACTOR
-			// =====================================================
-
-			float fastFactor =
-				Mathf.InverseLerp(
-					40f,
-					120f,
-					speedKmh
-				);
-
-			// =====================================================
-			// FRONT SLOW
-			// =====================================================
-
-			if (frontSlowSource != null)
-			{
-				frontSlowSource.volume =
-					volume * 1.4f;
-
-				frontSlowSource.pitch =
-					slowPitch * 0.99f;
-
-				if (!frontSlowSource.isPlaying)
-				{
-					frontSlowSource.Play();
-				}
-			}
-
-			// =====================================================
-			// REAR SLOW
-			// =====================================================
-
-			if (rearSlowSource != null)
-			{
-				rearSlowSource.volume =
-					volume * 1.5f;
-
-				rearSlowSource.pitch =
-					slowPitch * 1.01f;
-
-				if (!rearSlowSource.isPlaying)
-				{
-					rearSlowSource.Play();
-				}
-			}
-
-			// =====================================================
-			// FRONT FAST
-			// =====================================================
-
-			if (frontFastSource != null)
-			{
-				frontFastSource.volume =
-					volume *
-					fastFactor *
-					1.8f;
-
-				frontFastSource.pitch =
-					fastPitch * 0.99f;
-
-				if (!frontFastSource.isPlaying)
-				{
-					frontFastSource.Play();
-				}
-			}
-
-			// =====================================================
-			// REAR FAST
-			// =====================================================
-
-			if (rearFastSource != null)
-			{
-				rearFastSource.volume =
-					volume *
-					fastFactor *
-					2.0f;
-
-				rearFastSource.pitch =
-					fastPitch * 1.01f;
-
-				if (!rearFastSource.isPlaying)
-				{
-					rearFastSource.Play();
-				}
 			}
 		}
 
-		private void StopAudio()
+		// ------------------------------------------------
+		// STOP CONDITIONS
+		// ------------------------------------------------
+
+		if (damage < 0.10f ||
+			speedKmh < 5f)
 		{
-			if (frontSlowSource != null &&
-				frontSlowSource.isPlaying)
-			{
-				frontSlowSource.Stop();
-			}
+			StopAudio();
+			return;
+		}
 
-			if (rearSlowSource != null &&
-				rearSlowSource.isPlaying)
-			{
-				rearSlowSource.Stop();
-			}
+		// ------------------------------------------------
+		// DAMAGE VOLUME
+		// ------------------------------------------------
 
-			if (frontFastSource != null &&
-				frontFastSource.isPlaying)
-			{
-				frontFastSource.Stop();
-			}
+		float volume =
+			Mathf.Lerp(
+				0f,
+				1f,
+				damage
+			);
 
-			if (rearFastSource != null &&
-				rearFastSource.isPlaying)
+		// =====================================================
+		// WOBBLE
+		// =====================================================
+
+		float wobble =
+			Mathf.PerlinNoise(
+				Time.time * 0.35f,
+				0f
+			);
+
+		float wobblePitch =
+			Mathf.Lerp(
+				0.98f,
+				1.02f,
+				wobble
+			);
+
+		// =====================================================
+		// BASE PITCH
+		// =====================================================
+
+		float pitch =
+			Mathf.Clamp(
+				rps * 0.9f,
+				0.5f,
+				2.5f
+			);
+
+		pitch *= wobblePitch;
+
+		// =====================================================
+		// FRONT SOURCE
+		// =====================================================
+
+		if (frontSource != null)
+		{
+			frontSource.volume =
+				volume * 1.4f;
+
+			frontSource.pitch =
+				pitch * 0.99f;
+
+			if (!frontSource.isPlaying)
 			{
-				rearFastSource.Stop();
+				frontSource.Play();
+			}
+		}
+
+		// =====================================================
+		// REAR SOURCE
+		// =====================================================
+
+		if (rearSource != null)
+		{
+			rearSource.volume =
+				volume * 1.5f;
+
+			rearSource.pitch =
+				pitch * 1.01f;
+
+			if (!rearSource.isPlaying)
+			{
+				rearSource.Play();
 			}
 		}
 	}
+
+	private void StopAudio()
+	{
+		if (frontSource != null &&
+			frontSource.isPlaying)
+		{
+			frontSource.Stop();
+		}
+
+		if (rearSource != null &&
+			rearSource.isPlaying)
+		{
+			rearSource.Stop();
+		}
+	}
+}
 	/*
 	[HarmonyPatch(typeof(TrainComponentPool), "RequestTrainAudioFromPool")]
 	public static class FreightAudioDebugPatch
