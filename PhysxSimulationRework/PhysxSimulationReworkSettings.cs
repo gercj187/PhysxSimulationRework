@@ -47,7 +47,9 @@ namespace PhysxSimulationRework
 		
 		public bool enableWheelDamage = true;
 		public bool enableBrakeOverheatDamage = true;
+		public float overheatBaseDamage = 1f;
 		public bool enableWheelslideDamage = true;
+		public float wheelslideBaseDamage = 1f;
 		
 		//DEBUG
 		public bool enableDerailDebug = false;
@@ -521,17 +523,67 @@ namespace PhysxSimulationRework
 				{
 					richText = true
 				});				
+				Space(5);				
+				
+				if (enableBrakeOverheatDamage)
+				{
+					Label($"Overheat Damage Multiplier: {overheatBaseDamage * 100f:0}%");
+
+					overheatBaseDamage =
+					Mathf.Round(
+						HorizontalSlider(
+							overheatBaseDamage,
+							0f,
+							1f,
+							Width(500)
+						) * 100f
+					) / 100f;
+
+					Label(
+						"<i>(Base damage before temperature and speed modifiers are applied.)</i>",
+						new GUIStyle(GUI.skin.label)
+						{
+							richText = true
+						}
+					);
+				}		
 				Space(5);
+				
 				enableWheelslideDamage = GUILayout.Toggle(enableWheelslideDamage,"Enable Wheelslide damage"); 	
 
 				Label("<i>(Blocked wheels take severe damage at high speeds.)</i>", new GUIStyle(GUI.skin.label)
 				{
 					richText = true
 				});	
-			}		
-			Space(5);
-			GUILayout.EndVertical();
-			Space(2);
+
+				Space(5);
+				
+				if (enableWheelslideDamage)
+				{
+					Label($"Wheelslide Damage Multiplier: {wheelslideBaseDamage * 100f:0}%");
+
+					wheelslideBaseDamage =
+					Mathf.Round(
+						HorizontalSlider(
+							wheelslideBaseDamage,
+							0f,
+							1f,
+							Width(500)
+						) * 100f
+					) / 100f;
+
+					Label(
+						"<i>(Base damage before slide severity and speed modifiers are applied.)</i>",
+						new GUIStyle(GUI.skin.label)
+						{
+							richText = true
+						}
+					);
+				}		
+				Space(5);
+				GUILayout.EndVertical();
+				Space(2);
+			}
         }
     }
 }
