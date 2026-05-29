@@ -1585,43 +1585,36 @@ namespace PhysxSimulationRework
 
 			timer += Time.deltaTime;
 
-			float interval = 60f;
+			float interval = 30f;
 			float damage = 1f * settings.overheatBaseDamage;
 
 			if (temp >= 999f)
 			{
-				interval = 5f;
 				damage = 20f;
 			}
 			else if (temp >= 900f)
 			{
-				interval = 10f;
 				damage = 15f;
 			}
 			else if (temp >= 850f)
 			{
-				interval = 15f;
 				damage = 10f;
 			}
 			else if (temp >= 800f)
 			{
-				interval = 20f;
 				damage = 5f;
 			}
 			else if (temp >= 750f)
 			{
-				interval = 30f;
-				damage = 5f;
+				damage = 4f;
 			}
 			else if (temp >= 700f)
 			{
-				interval = 35f;
-				damage = 5f;
+				damage = 3f;
 			}
 			else if (temp >= 650f)
 			{
-				interval = 40f;
-				damage = 5f;
+				damage = 2f;
 			}
 
 			if (timer < interval)
@@ -1800,7 +1793,7 @@ namespace PhysxSimulationRework
 			// REAL WHEEL SLIDE
 			// =====================================================
 
-			bool wheelSliding =	car.adhesionController.wheelSlide > 0.05f;
+			bool wheelSliding =	car.adhesionController.wheelSlide > 0.25f;
 
 			if (!wheelSliding)
 			{
@@ -1843,13 +1836,7 @@ namespace PhysxSimulationRework
 			// DAMAGE
 			// =====================================================
 
-			float damage = 50f * settings.wheelslideBaseDamage;
-
-			damage *= Mathf.Lerp(
-				1f,
-				3f,
-				car.adhesionController.wheelSlide
-			);
+			float damage = 10f * settings.wheelslideBaseDamage;
 			
 			// =====================================================
 			// SPEED MULTIPLIER
