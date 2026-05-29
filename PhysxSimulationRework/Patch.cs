@@ -1793,7 +1793,7 @@ namespace PhysxSimulationRework
 			// REAL WHEEL SLIDE
 			// =====================================================
 
-			bool wheelSliding =	car.adhesionController.wheelSlide > 0.25f;
+			bool wheelSliding =	car.adhesionController.wheelSlide > 0.05f;
 
 			if (!wheelSliding)
 			{
@@ -1836,7 +1836,7 @@ namespace PhysxSimulationRework
 			// DAMAGE
 			// =====================================================
 
-			float damage = 10f * settings.wheelslideBaseDamage;
+			float damage = 50f * settings.wheelslideBaseDamage;
 			
 			// =====================================================
 			// SPEED MULTIPLIER
@@ -1889,6 +1889,12 @@ namespace PhysxSimulationRework
 				if (method == null)
 					return;
 
+			 
+							   
+												  
+  
+											  
+
 				method.Invoke(
 					car.CarDamage,
 					new object[]
@@ -1897,12 +1903,17 @@ namespace PhysxSimulationRework
 						true
 					}
 				);
+	
+											 
 
 				ModLog.Wheel(
 					$"DAMAGE APPLIED " +
 					$"| Car={car.ID} " +
 					$"| Slide={car.adhesionController.wheelSlide:F2} " +
 					$"| Damage={(damage / 10000f):P2}"
+							  
+							
+								  
 				);
 			}
 			catch (Exception ex)
