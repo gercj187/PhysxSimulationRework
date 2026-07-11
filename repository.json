@@ -2,8 +2,8 @@
 	"Releases": [
 		{
 			"Id": "PhysxSimulationRework",
-			"Version": "1.03.3",
-			"DownloadUrl": "https://github.com/gercj187/PhysxSimulationRework/releases/download/PhysxSimulationRework/PhysxSimulationRework_v1.03.3.zip"
+			"Version": "1.03.5",
+			"DownloadUrl": "https://github.com/gercj187/PhysxSimulationRework/releases/download/PhysxSimulationRework/PhysxSimulationRework_v1.03.5.zip"
 		}
 	]
 }
