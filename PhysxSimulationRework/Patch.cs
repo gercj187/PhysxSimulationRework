@@ -1402,6 +1402,20 @@ namespace PhysxSimulationRework
 	{
 		static void Postfix(BrakesOverheatingController __instance)
 		{
+			// CHANGE: Wheel-Damage-Einstellungen vor der Komponentenerstellung prüfen
+			var settings = Main.Settings;
+
+			if (settings == null)
+				return;
+
+			// CHANGE: Bei deaktiviertem Hauptsystem kein Behaviour erzeugen
+			if (!settings.enableWheelDamage)
+				return;
+
+			// CHANGE: Unterfunktion ebenfalls berücksichtigen
+			if (!settings.enableBrakeOverheatDamage)
+				return;
+
 			if (__instance == null)
 				return;
 
@@ -1737,6 +1751,20 @@ namespace PhysxSimulationRework
 	{
 		static void Postfix(WheelSlideSparksController __instance)
 		{
+			// CHANGE: Wheel-Damage-Einstellungen vor der Komponentenerstellung prüfen
+			var settings = Main.Settings;
+
+			if (settings == null)
+				return;
+
+			// CHANGE: Bei deaktiviertem Hauptsystem kein Behaviour erzeugen
+			if (!settings.enableWheelDamage)
+				return;
+
+			// CHANGE: Unterfunktion ebenfalls berücksichtigen
+			if (!settings.enableWheelslideDamage)
+				return;
+
 			if (__instance == null)
 				return;
 
@@ -1933,188 +1961,379 @@ namespace PhysxSimulationRework
 	public static class FreightFlatspotAudioPatch
 	{
 		private static AudioClip? damagedSlow;
+		private static bool clipSearchAttempted;
 
-		static void Postfix(
-			TrainCar car,
-			TrainAudio __result)
+		static void Postfix(TrainCar car, TrainAudio __result)
 		{
 			try
 			{
-				if (car == null)
+				var settings = Main.Settings;
+
+				if (settings == null || !settings.enableWheelDamage)
 					return;
 
-				if (car.IsLoco)
+				if (car == null || car.IsLoco || __result == null)
 					return;
 
-				if (__result == null)
-					return;
+				// NEW:
+				// Clip nur einmal suchen, nicht bei jedem neu geladenen Wagen.
+				EnsureDamagedWheelClip();
 
-				if (car.GetComponent<FreightFlatspotAudioBehaviour>() != null)
-					return;
-
-				// ------------------------------------------------
-				// FIND CLIP
-				// ------------------------------------------------
-
-				if (damagedSlow == null)
-				{
-					var clips =
-						Resources.FindObjectsOfTypeAll<AudioClip>();
-
-					foreach (var clip in clips)
-					{
-						if (clip == null)
-							continue;
-
-						if (clip.name == "Wheels_DamagedSlow_01")
-						{
-							damagedSlow = clip;
-
-							Debug.Log(
-								"[Flatspot] Found Wheels_DamagedSlow_01"
-							);
-
-							break;
-						}
-					}
-				}
-
-				var behaviour =
-					car.gameObject.AddComponent<
-						FreightFlatspotAudioBehaviour>();
-
-				behaviour.Initialize(
-					car,
-					damagedSlow
-				);
-
-				Debug.Log(
-					$"[Flatspot] Added to {car.ID}"
-				);
+				// NEW:
+				// Wagen nur beim zentralen Manager registrieren.
+				FreightFlatspotAudioManager.EnsureExists();
+				FreightFlatspotAudioManager.Register(car, damagedSlow);
 			}
 			catch (Exception ex)
 			{
 				Debug.LogError(
-					$"[Flatspot] Failed: {ex}"
+					$"[Flatspot] Registration failed: {ex}"
 				);
 			}
+		}
+
+		// NEW
+		private static void EnsureDamagedWheelClip()
+		{
+			if (damagedSlow != null || clipSearchAttempted)
+				return;
+
+			clipSearchAttempted = true;
+
+			AudioClip[] clips =
+				Resources.FindObjectsOfTypeAll<AudioClip>();
+
+			for (int i = 0; i < clips.Length; i++)
+			{
+				AudioClip clip = clips[i];
+
+				if (clip == null)
+					continue;
+
+				if (clip.name != "Wheels_DamagedSlow_01")
+					continue;
+
+				damagedSlow = clip;
+
+				ModLog.Wheel(
+					"Found Wheels_DamagedSlow_01"
+				);
+
+				return;
+			}
+
+			Debug.LogWarning(
+				"[Flatspot] Wheels_DamagedSlow_01 was not found"
+			);
 		}
 	}
 
 	// ======================================================
-	// BEHAVIOUR
+	// CENTRAL FLATSPOT AUDIO MANAGER
 	// ======================================================
 
-	public class FreightFlatspotAudioBehaviour : MonoBehaviour
+	public sealed class FreightFlatspotAudioManager : MonoBehaviour
 	{
-		private TrainCar? car;
+		private sealed class FlatspotEntry
+		{
+			public TrainCar? car;
+			public AudioClip? clip;
 
-		private AudioSource? frontSource;
-		private AudioSource? rearSource;
+			public AudioSource? frontSource;
+			public AudioSource? rearSource;
+
+			public float distanceSqr;
+			public float lastRequiredTime;
+			public bool shouldPlay;
+		}
+
+		private static FreightFlatspotAudioManager? instance;
+
+		private static readonly Dictionary<int, FlatspotEntry> entries =
+			new Dictionary<int, FlatspotEntry>();
+
+		private static readonly List<FlatspotEntry> candidates =
+			new List<FlatspotEntry>();
+
+		// NEW:
+		// Nur fünf Prüfungen pro Sekunde.
+		private const float CHECK_INTERVAL = 0.2f;
+
+		// NEW:
+		// Flatspot-Sounds werden nur in Spielnähe berechnet.
+		private const float MAX_AUDIBLE_DISTANCE = 150f;
+
+		private const float MAX_AUDIBLE_DISTANCE_SQR =
+			MAX_AUDIBLE_DISTANCE * MAX_AUDIBLE_DISTANCE;
+
+		// NEW:
+		// Verhindert extrem viele gleichzeitig laufende Sounds.
+		private const int MAX_ACTIVE_CARS = 24;
+
+		// NEW:
+		// AudioSources nach längerer Nichtbenutzung wieder entfernen.
+		private const float SOURCE_RELEASE_DELAY = 10f;
 
 		private const float WHEEL_RADIUS = 0.7f;
+		private const float MIN_DAMAGE = 0.10f;
+		private const float MIN_SPEED_KMH = 2.5f;
+		private const float MAX_WHEEL_SLIDE = 0.01f;
 
-		public void Initialize(
-			TrainCar trainCar,
-			AudioClip? slowClip)
+		private float nextCheckTime;
+
+		// ======================================================
+		// MANAGER CREATION
+		// ======================================================
+
+		public static void EnsureExists()
 		{
-			car = trainCar;
+			if (instance != null)
+				return;
 
-			// =====================================================
-			// FRONT / REAR PARENTS
-			// =====================================================
+			GameObject managerObject =
+				new GameObject("PhysxSimulationRework_FlatspotManager");
 
-			Transform frontParent =
-				trainCar.FrontBogie != null
-					? trainCar.FrontBogie.transform
-					: trainCar.transform;
+			DontDestroyOnLoad(managerObject);
 
-			Transform rearParent =
-				trainCar.RearBogie != null
-					? trainCar.RearBogie.transform
-					: trainCar.transform;
-
-			// =====================================================
-			// FRONT BOGIE
-			// =====================================================
-
-			if (slowClip != null)
-			{
-				frontSource =
-					frontParent.gameObject.AddComponent<AudioSource>();
-
-				frontSource.clip = slowClip;
-				frontSource.loop = true;
-				frontSource.playOnAwake = false;
-
-				Setup3DAudio(frontSource);
-			}
-
-			// =====================================================
-			// REAR BOGIE
-			// =====================================================
-
-			if (slowClip != null)
-			{
-				rearSource =
-					rearParent.gameObject.AddComponent<AudioSource>();
-
-				rearSource.clip = slowClip;
-				rearSource.loop = true;
-				rearSource.playOnAwake = false;
-
-				Setup3DAudio(rearSource);
-			}
+			instance =
+				managerObject.AddComponent<FreightFlatspotAudioManager>();
 		}
 
-		private void Setup3DAudio(AudioSource src)
-		{
-			src.spatialBlend = 1f;
-			src.spread = 25f;
-			src.priority = 128;
-			
-			if (SingletonBehaviour<AudioManager>.Instance != null && SingletonBehaviour<AudioManager>.Instance.railWheelGroup != null)
-			{
-				src.outputAudioMixerGroup =	SingletonBehaviour<AudioManager>.Instance.railWheelGroup;
-			}
+		// ======================================================
+		// REGISTRATION
+		// ======================================================
 
-			src.rolloffMode = AudioRolloffMode.Logarithmic;
-
-			src.minDistance = 8f;
-			src.maxDistance = 100f;
-
-			src.dopplerLevel = 0.3f;
-
-			src.ignoreListenerPause = true;
-		}
-
-		private void Update()
+		public static void Register(
+			TrainCar car,
+			AudioClip? clip)
 		{
 			if (car == null)
 				return;
 
-			if (car.derailed)
+			EnsureExists();
+
+			int carId = car.GetInstanceID();
+
+			if (entries.TryGetValue(carId, out FlatspotEntry entry))
 			{
-				StopAudio();
+				entry.car = car;
+
+				if (clip != null)
+					entry.clip = clip;
+
 				return;
 			}
 
-			if (car.CarDamage == null)
+			entries.Add(
+				carId,
+				new FlatspotEntry
+				{
+					car = car,
+					clip = clip,
+					lastRequiredTime = Time.unscaledTime
+				}
+			);
+		}
+
+		// ======================================================
+		// CENTRAL UPDATE
+		// ======================================================
+
+		private void Update()
+		{
+			if (Time.unscaledTime < nextCheckTime)
 				return;
 
-			float damage =
-				car.CarDamage.DamagePercentage;
+			nextCheckTime =
+				Time.unscaledTime + CHECK_INTERVAL;
 
-			float speed =
-				car.rb != null
-					? car.rb.velocity.magnitude
+			ProcessEntries();
+		}
+
+		// ======================================================
+		// PROCESS ALL REGISTERED CARS
+		// ======================================================
+
+		private static void ProcessEntries()
+		{
+			var settings = Main.Settings;
+
+			Transform playerTransform =
+				PlayerManager.PlayerTransform;
+
+			bool systemEnabled =
+				settings != null &&
+				settings.enableWheelDamage &&
+				playerTransform != null;
+
+			Vector3 playerPosition =
+				playerTransform != null
+					? playerTransform.position
+					: Vector3.zero;
+
+			candidates.Clear();
+
+			List<int>? deadEntries = null;
+
+			foreach (
+				KeyValuePair<int, FlatspotEntry> pair
+				in entries)
+			{
+				FlatspotEntry entry = pair.Value;
+				TrainCar? car = entry.car;
+
+				entry.shouldPlay = false;
+
+				if (car == null)
+				{
+					if (deadEntries == null)
+						deadEntries = new List<int>();
+
+					deadEntries.Add(pair.Key);
+					continue;
+				}
+
+				if (!systemEnabled)
+				{
+					StopAndPossiblyRelease(entry);
+					continue;
+				}
+
+				Vector3 difference =
+					car.transform.position - playerPosition;
+
+				entry.distanceSqr =
+					difference.sqrMagnitude;
+
+				if (entry.distanceSqr >
+					MAX_AUDIBLE_DISTANCE_SQR)
+				{
+					StopAndPossiblyRelease(entry);
+					continue;
+				}
+
+				if (!IsFlatspotAudioRequired(car))
+				{
+					StopAndPossiblyRelease(entry);
+					continue;
+				}
+
+				candidates.Add(entry);
+			}
+
+			if (deadEntries != null)
+			{
+				for (int i = 0; i < deadEntries.Count; i++)
+				{
+					int id = deadEntries[i];
+
+					if (!entries.TryGetValue(
+						id,
+						out FlatspotEntry deadEntry))
+					{
+						continue;
+					}
+
+					DestroySources(deadEntry);
+					entries.Remove(id);
+				}
+			}
+
+			// NEW:
+			// Die nächstgelegenen Wagen erhalten Priorität.
+			candidates.Sort(
+				(a, b) =>
+					a.distanceSqr.CompareTo(b.distanceSqr)
+			);
+
+			int activeCount =
+				Mathf.Min(
+					MAX_ACTIVE_CARS,
+					candidates.Count
+				);
+
+			for (int i = 0; i < candidates.Count; i++)
+			{
+				FlatspotEntry entry =
+					candidates[i];
+
+				if (i < activeCount)
+				{
+					entry.shouldPlay = true;
+					entry.lastRequiredTime =
+						Time.unscaledTime;
+
+					UpdateAudio(entry);
+				}
+				else
+				{
+					StopAndPossiblyRelease(entry);
+				}
+			}
+		}
+
+		// ======================================================
+		// REQUIREMENT CHECK
+		// ======================================================
+
+		private static bool IsFlatspotAudioRequired(
+			TrainCar car)
+		{
+			if (car.derailed)
+				return false;
+
+			if (car.CarDamage == null)
+				return false;
+
+			if (car.CarDamage.DamagePercentage <
+				MIN_DAMAGE)
+			{
+				return false;
+			}
+
+			if (car.rb == null)
+				return false;
+
+			float speedKmh =
+				car.rb.velocity.magnitude * 3.6f;
+
+			if (speedKmh < MIN_SPEED_KMH)
+				return false;
+
+			if (car.adhesionController != null &&
+				car.adhesionController.wheelSlide >
+				MAX_WHEEL_SLIDE)
+			{
+				return false;
+			}
+
+			return true;
+		}
+
+		// ======================================================
+		// AUDIO UPDATE
+		// ======================================================
+
+		private static void UpdateAudio(
+			FlatspotEntry entry)
+		{
+			TrainCar? car = entry.car;
+
+			if (car == null || car.rb == null)
+				return;
+
+			if (entry.clip == null)
+				return;
+
+			EnsureSources(entry);
+
+			float damage =
+				car.CarDamage != null
+					? car.CarDamage.DamagePercentage
 					: 0f;
 
-			float speedKmh = speed * 3.6f;
-
-			// =====================================================
-			// REAL WHEEL ROTATION
-			// =====================================================
+			float speed =
+				car.rb.velocity.magnitude;
 
 			float wheelCircumference =
 				2f * Mathf.PI * WHEEL_RADIUS;
@@ -2122,51 +2341,8 @@ namespace PhysxSimulationRework
 			float rps =
 				speed / wheelCircumference;
 
-			// =====================================================
-			// NO FLATSPOTS WHILE WHEELSLIDING
-			// =====================================================
-
-			if (car.adhesionController != null)
-			{
-				float slide =
-					car.adhesionController.wheelSlide;
-
-				// -------------------------------------------------
-				// blocked wheel = no rolling flatspot sound
-				// -------------------------------------------------
-
-				if (slide > 0.01f)
-				{
-					StopAudio();
-					return;
-				}
-			}
-
-			// ------------------------------------------------
-			// STOP CONDITIONS
-			// ------------------------------------------------
-
-			if (damage < 0.10f ||
-				speedKmh < 2.5f)
-			{
-				StopAudio();
-				return;
-			}
-
-			// ------------------------------------------------
-			// DAMAGE VOLUME
-			// ------------------------------------------------
-
 			float volume =
-				Mathf.Lerp(
-					0f,
-					1f,
-					damage
-				);
-
-			// =====================================================
-			// WOBBLE
-			// =====================================================
+				Mathf.Clamp01(damage);
 
 			float wobble =
 				Mathf.PerlinNoise(
@@ -2181,10 +2357,6 @@ namespace PhysxSimulationRework
 					wobble
 				);
 
-			// =====================================================
-			// BASE PITCH
-			// =====================================================
-
 			float pitch =
 				Mathf.Clamp(
 					rps * 0.9f,
@@ -2194,56 +2366,189 @@ namespace PhysxSimulationRework
 
 			pitch *= wobblePitch;
 
-			// =====================================================
-			// FRONT SOURCE
-			// =====================================================
-
-			if (frontSource != null)
+			if (entry.frontSource != null)
 			{
-				frontSource.volume =
+				entry.frontSource.volume =
 					volume * 1.4f;
 
-				frontSource.pitch =
+				entry.frontSource.pitch =
 					pitch * 0.99f;
 
-				if (!frontSource.isPlaying)
-				{
-					frontSource.Play();
-				}
+				if (!entry.frontSource.isPlaying)
+					entry.frontSource.Play();
 			}
 
-			// =====================================================
-			// REAR SOURCE
-			// =====================================================
-
-			if (rearSource != null)
+			if (entry.rearSource != null)
 			{
-				rearSource.volume =
+				entry.rearSource.volume =
 					volume * 1.5f;
 
-				rearSource.pitch =
+				entry.rearSource.pitch =
 					pitch * 1.01f;
 
-				if (!rearSource.isPlaying)
-				{
-					rearSource.Play();
-				}
+				if (!entry.rearSource.isPlaying)
+					entry.rearSource.Play();
 			}
 		}
 
-		private void StopAudio()
+		// ======================================================
+		// LAZY AUDIO SOURCE CREATION
+		// ======================================================
+
+		private static void EnsureSources(
+			FlatspotEntry entry)
 		{
-			if (frontSource != null &&
-				frontSource.isPlaying)
+			TrainCar? car = entry.car;
+
+			if (car == null || entry.clip == null)
+				return;
+
+			Transform frontParent =
+				car.FrontBogie != null
+					? car.FrontBogie.transform
+					: car.transform;
+
+			Transform rearParent =
+				car.RearBogie != null
+					? car.RearBogie.transform
+					: car.transform;
+
+			if (entry.frontSource == null)
 			{
-				frontSource.Stop();
+				entry.frontSource =
+					frontParent.gameObject
+						.AddComponent<AudioSource>();
+
+				entry.frontSource.clip =
+					entry.clip;
+
+				entry.frontSource.loop = true;
+				entry.frontSource.playOnAwake = false;
+
+				Setup3DAudio(
+					entry.frontSource
+				);
 			}
 
-			if (rearSource != null &&
-				rearSource.isPlaying)
+			if (entry.rearSource == null)
 			{
-				rearSource.Stop();
+				entry.rearSource =
+					rearParent.gameObject
+						.AddComponent<AudioSource>();
+
+				entry.rearSource.clip =
+					entry.clip;
+
+				entry.rearSource.loop = true;
+				entry.rearSource.playOnAwake = false;
+
+				Setup3DAudio(
+					entry.rearSource
+				);
 			}
+		}
+
+		private static void Setup3DAudio(
+			AudioSource source)
+		{
+			source.spatialBlend = 1f;
+			source.spread = 25f;
+			source.priority = 128;
+
+			if (
+				SingletonBehaviour<AudioManager>.Instance != null &&
+				SingletonBehaviour<AudioManager>.Instance
+					.railWheelGroup != null)
+			{
+				source.outputAudioMixerGroup =
+					SingletonBehaviour<AudioManager>.Instance
+						.railWheelGroup;
+			}
+
+			source.rolloffMode =
+				AudioRolloffMode.Logarithmic;
+
+			source.minDistance = 8f;
+			source.maxDistance = 100f;
+
+			source.dopplerLevel = 0.3f;
+			source.ignoreListenerPause = true;
+		}
+
+		// ======================================================
+		// STOP / RELEASE
+		// ======================================================
+
+		private static void StopAndPossiblyRelease(
+			FlatspotEntry entry)
+		{
+			StopSources(entry);
+
+			if (entry.frontSource == null &&
+				entry.rearSource == null)
+			{
+				return;
+			}
+
+			if (
+				Time.unscaledTime -
+				entry.lastRequiredTime <
+				SOURCE_RELEASE_DELAY)
+			{
+				return;
+			}
+
+			DestroySources(entry);
+		}
+
+		private static void StopSources(
+			FlatspotEntry entry)
+		{
+			if (
+				entry.frontSource != null &&
+				entry.frontSource.isPlaying)
+			{
+				entry.frontSource.Stop();
+			}
+
+			if (
+				entry.rearSource != null &&
+				entry.rearSource.isPlaying)
+			{
+				entry.rearSource.Stop();
+			}
+		}
+
+		private static void DestroySources(
+			FlatspotEntry entry)
+		{
+			if (entry.frontSource != null)
+			{
+				Destroy(entry.frontSource);
+				entry.frontSource = null;
+			}
+
+			if (entry.rearSource != null)
+			{
+				Destroy(entry.rearSource);
+				entry.rearSource = null;
+			}
+		}
+
+		private void OnDestroy()
+		{
+			foreach (
+				FlatspotEntry entry
+				in entries.Values)
+			{
+				DestroySources(entry);
+			}
+
+			entries.Clear();
+			candidates.Clear();
+
+			if (instance == this)
+				instance = null;
 		}
 	}
 	/*

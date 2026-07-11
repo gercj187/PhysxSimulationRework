@@ -581,9 +581,9 @@ namespace PhysxSimulationRework
 					);
 				}		
 				Space(5);
-				GUILayout.EndVertical();
-				Space(2);
 			}
+			GUILayout.EndVertical();
+			Space(2);
         }
     }
 }
