@@ -1,0 +1,18 @@
+{
+	"Id": "PhysxSimulationReworkMP",
+	"Version": "1.04.0",
+	"DisplayName": "PhysX SimulationRework (MP)",
+	"Author": "CJ187",
+	"Credits": "Coookie, NotAnOption and ChatGPT",
+	"AssemblyName": "PhysxSimulationRework.dll",
+	"EntryMethod": "PhysxSimulationRework.Main.Load",
+	"ManagerVersion": "0.27.2",
+	"HomePage": "https://www.nexusmods.com/derailvalley/mods/1419",
+	"Repository": "https://raw.githubusercontent.com/gercj187/PhysxSimulationRework/main/Multiplayer/repository.json",
+	"LoadAfter": [
+		"Multiplayer"
+	],
+	"Requirements": [
+		"Multiplayer"
+	]
+}
