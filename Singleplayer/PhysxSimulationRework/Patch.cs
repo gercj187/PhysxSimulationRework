@@ -1024,6 +1024,96 @@ namespace PhysxSimulationRework
 			}
 		}
 	}
+	
+	// -------------------------------------------------
+	// BLOCK UNSCREWING OF TIGHT COUPLER UNDER LOAD
+	// -------------------------------------------------
+	[HarmonyPatch(typeof(ChainCouplerInteraction), "OnScrewButtonUsed")]
+	internal static class ChainCouplerInteraction_ScrewProtection_Patch
+	{
+		private const float UNSCREW_BLOCK_FORCE = 400000f;
+		
+		[HarmonyPrefix]
+		private static bool Prefix(ChainCouplerInteraction __instance)
+		{
+			var settings = Main.Settings;
+
+			if (settings == null || !settings.enableCouplerFailure)
+			{
+				return true;
+			}
+
+			if (__instance == null || __instance.couplerAdapter == null)
+			{
+				return true;
+			}
+			
+			if (__instance.CurrentState != ChainCouplerInteraction.State.Attached_Tight)
+			{
+				return true;
+			}
+
+			Coupler coupler = __instance.couplerAdapter.coupler;
+
+			if (coupler == null || !coupler.IsCoupled())
+			{
+				return true;
+			}		
+
+			Coupler? jointCoupler = null;
+
+			if (coupler.rigidCJ != null)
+			{
+				jointCoupler = coupler;
+			}
+			else if (coupler.coupledTo != null && coupler.coupledTo.rigidCJ != null)
+			{
+				jointCoupler = coupler.coupledTo;
+			}
+
+			if (jointCoupler == null || jointCoupler.rigidCJ == null)
+			{
+				ModLog.Coupler(
+					$"Screw click: no physical joint found " +
+					$"| Car={coupler.train?.ID}"
+				);
+
+				return true;
+			}
+
+			ConfigurableJoint joint = jointCoupler.rigidCJ;
+			
+			float currentForce = joint.currentForce.magnitude;
+			float currentTorque = joint.currentTorque.magnitude;
+			float forceLimit = UNSCREW_BLOCK_FORCE;
+			bool overloaded = currentForce >= forceLimit;
+			
+			ModLog.Coupler(
+				$"Unscrew coupler check " +
+				$"| ClickedCar={coupler.train?.ID} " +
+				$"| Force={currentForce / 1000f:F1} N " +
+				$"| UnscrewLimit={forceLimit / 1000f:F1} N"
+			);
+			
+			if (!overloaded)
+			{
+				return true;
+			}
+			
+			joint.breakForce = float.PositiveInfinity;
+
+			joint.breakTorque = float.PositiveInfinity;
+
+			ModLog.Coupler(
+				$"UNSCREW BLOCKED " +
+				$"| Car={coupler.train?.ID} " +
+				$"| Force={currentForce / 1000f:F1} N " +
+				$"| UnscrewLimit={forceLimit / 1000f:F1} N"
+			);
+			
+			return false;
+		}
+	}
 
 	[HarmonyPatch(typeof(DrivingForce), "FixedUpdate")]
 	public static class DrivingForce_StressTrigger_Patch
