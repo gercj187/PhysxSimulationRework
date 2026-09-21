@@ -65,6 +65,23 @@ namespace PhysxSimulationRework
 		public string CarGuidB { get; set; } = string.Empty;
 		public bool IsFrontCouplerB { get; set; }
 	}
+	
+	public sealed class ServerBoundPhysxCouplerUnscrewRequestPacket : IPacket
+	{
+		public string RequestToken { get; set; } = string.Empty;
+		public string CarGuid { get; set; } = string.Empty;
+		public bool IsFrontCoupler { get; set; }
+	}
+
+
+	public sealed class ClientBoundPhysxCouplerUnscrewDecisionPacket : IPacket
+	{
+		public string RequestToken { get; set; } = string.Empty;
+		public string CarGuid { get; set; } = string.Empty;
+		public bool IsFrontCoupler { get; set; }
+		public bool Allowed { get; set; }
+		public float ForceN { get; set; }
+	}
 
     public sealed class ClientBoundPhysxSettingsPacket : IPacket
     {
@@ -109,13 +126,9 @@ namespace PhysxSimulationRework
     public sealed class ClientBoundPhysxWorldEventPacket : IPacket
     {
         public int EventId { get; set; }
-
         public int EventType { get; set; }
-
         public string CarGuid { get; set; } = string.Empty;
-
         public float TargetDamagePercentage { get; set; }
-
         public string Reason { get; set; } = string.Empty;
     }
 
@@ -126,9 +139,7 @@ namespace PhysxSimulationRework
     internal static class PSR_Multiplayer
     {
         private static GameObject? runtimeObject;
-
         private static int nextWorldEventId = 1;
-
         public static bool HasReceivedHostSettings { get; private set; }
 
         public static bool IsHost
@@ -165,9 +176,6 @@ namespace PhysxSimulationRework
             }
         }
 
-        // NEW:
-        // Diese Standalone-Version erzeugt Gameplay-Ereignisse
-        // ausschließlich auf dem Host.
         public static bool CanRunAuthoritativeGameplay => IsHost;
 
         public static void Initialize()
@@ -216,6 +224,96 @@ namespace PhysxSimulationRework
 
             return id;
         }
+		
+		// =====================================================
+		// COUPLER NETWORK IDENTIFICATION
+		// =====================================================
+
+		internal static bool TryGetCouplerNetworkId(Coupler coupler,out string carGuid,out bool isFront)
+		{
+			carGuid = string.Empty;
+			isFront = false;
+
+			if (coupler == null)
+				return false;
+
+			TrainCar? car = coupler.GetComponentInParent<TrainCar>();
+
+			if (car == null || string.IsNullOrEmpty(car.CarGUID))
+			{
+				return false;
+			}
+
+			if (ReferenceEquals(car.frontCoupler,coupler))
+			{
+				isFront = true;
+			}
+			else if (ReferenceEquals(car.rearCoupler,coupler))
+			{
+				isFront = false;
+			}
+			else
+			{
+				return false;
+			}
+
+			carGuid = car.CarGUID;
+
+			return true;
+		}
+
+		internal static Coupler? FindNetworkCoupler(string carGuid,bool isFront)
+		{
+			if (string.IsNullOrEmpty(carGuid))
+				return null;
+
+			TrainCarRegistry? registry = SingletonBehaviour<TrainCarRegistry>.Instance;
+
+			if (registry == null)
+				return null;
+
+			TrainCar? car = registry.GetTrainCarByCarGuid(carGuid);
+
+			if (car == null)
+				return null;
+
+			return isFront
+				? car.frontCoupler
+				: car.rearCoupler;
+		}
+
+		// =====================================================
+		// CLIENT -> HOST UNSCREW REQUEST
+		// =====================================================
+
+		public static void RequestCouplerUnscrewAuthorization(Coupler coupler)
+		{
+			if (!IsClient || coupler == null)
+			{
+				return;
+			}
+
+			string carGuid;
+			bool isFront;
+
+			if (!TryGetCouplerNetworkId(coupler,out carGuid,out isFront))
+			{
+				Main.Mod?.Logger.Warning(
+					"[MP] Could not identify coupler " +
+					"for unscrew authorization."
+				);
+				return;
+			}
+
+			var packet = new ServerBoundPhysxCouplerUnscrewRequestPacket
+			{
+				RequestToken = Guid.NewGuid().ToString("N"),
+				CarGuid = carGuid,
+				IsFrontCoupler = isFront
+			};
+
+			PhysxSimulationReworkMPClient.Instance ?.SendCouplerUnscrewRequest(packet);
+		}
 
 		// =====================================================
 		// TURNTABLE WARNING SOUND
@@ -553,16 +651,15 @@ namespace PhysxSimulationRework
         }
 
         private IClient? client;
-
         private bool registered;
-
         private bool snapshotReceived;
-
         private float nextRequestTime;
-
-        private int lastWorldEventId;
-		
+        private int lastWorldEventId;		
 		private int lastCouplerBreakEventId;
+		
+		private readonly Dictionary<string, string>
+			pendingCouplerUnscrewRequests =
+				new Dictionary<string, string>();
 
 		private readonly HashSet<string>
 			processedTurntableBellTokens =
@@ -600,6 +697,7 @@ namespace PhysxSimulationRework
 				lastWorldEventId = 0;
 				lastCouplerBreakEventId = 0;
 
+				pendingCouplerUnscrewRequests.Clear();
 				processedTurntableBellTokens.Clear();
 				processedTurntableBellTokenOrder.Clear();
 			}
@@ -642,6 +740,11 @@ namespace PhysxSimulationRework
 			client.RegisterPacket<
 				ClientBoundPhysxCouplerBreakPacket>(
 				OnCouplerBreakReceived
+			);
+			
+			client.RegisterPacket<
+				ClientBoundPhysxCouplerUnscrewDecisionPacket>(
+				OnCouplerUnscrewDecisionReceived
 			);
 
             registered = true;
@@ -971,6 +1074,147 @@ namespace PhysxSimulationRework
 					oldestToken
 				);
 			}
+		}		
+		
+		public void SendCouplerUnscrewRequest(ServerBoundPhysxCouplerUnscrewRequestPacket packet)
+		{
+			if (packet == null ||
+				client == null ||
+				!registered ||
+				!PSR_Multiplayer.IsClient)
+			{
+				return;
+			}
+
+			if (string.IsNullOrEmpty(
+				packet.RequestToken) ||
+				string.IsNullOrEmpty(
+				packet.CarGuid))
+			{
+				return;
+			}
+
+			string key =
+				packet.CarGuid +
+				":" +
+				(packet.IsFrontCoupler
+					? "F"
+					: "R");
+					
+			if (pendingCouplerUnscrewRequests
+				.ContainsKey(key))
+			{
+				return;
+			}
+			
+			pendingCouplerUnscrewRequests[key] =
+				packet.RequestToken;
+
+
+			client.SendPacketToServer(
+				packet,
+				reliable: true
+			);
+
+			ModLog.Coupler(
+				$"Client requested coupler unscrew " +
+				$"| CarGuid={packet.CarGuid} " +
+				$"| Side=" +
+				$"{(packet.IsFrontCoupler ? "FRONT" : "REAR")} " +
+				$"| Token={packet.RequestToken}"
+			);
+		}
+		
+		private void OnCouplerUnscrewDecisionReceived(ClientBoundPhysxCouplerUnscrewDecisionPacket packet)
+		{
+			if (packet == null ||
+				string.IsNullOrEmpty(packet.RequestToken) ||
+				string.IsNullOrEmpty(packet.CarGuid))
+			{
+				return;
+			}
+
+			string key =
+				packet.CarGuid +
+				":" +
+				(packet.IsFrontCoupler
+					? "F"
+					: "R");
+
+			if (!pendingCouplerUnscrewRequests
+				.TryGetValue(
+					key,
+					out string? expectedToken))
+			{
+				return;
+			}
+
+			if (expectedToken !=
+				packet.RequestToken)
+			{
+				return;
+			}
+
+			pendingCouplerUnscrewRequests.Remove(
+				key
+			);
+
+			// =====================================================
+			// HOST HAT BLOCKIERT
+			// =====================================================
+
+			if (!packet.Allowed)
+			{
+				ModLog.Coupler(
+					$"HOST BLOCKED UNSCREW " +
+					$"| CarGuid={packet.CarGuid} " +
+					$"| Side=" +
+					$"{(packet.IsFrontCoupler ? "FRONT" : "REAR")} " +
+					$"| HostForce=" +
+					$"{packet.ForceN / 1000f:F1} kN " +
+					$"| Limit=" +
+					$"{ChainCouplerInteraction_ScrewProtection_Patch.UNSCREW_BLOCK_FORCE / 1000f:F1} kN"
+				);
+
+				return;
+			}
+
+			// =====================================================
+			// HOST HAT ERLAUBT
+			// =====================================================
+
+			Coupler? coupler =
+				PSR_Multiplayer.FindNetworkCoupler(
+					packet.CarGuid,
+					packet.IsFrontCoupler
+				);
+
+			if (coupler == null)
+			{
+				Main.Mod?.Logger.Warning(
+					$"[MP] Approved unscrew coupler " +
+					$"not found locally " +
+					$"| CarGuid={packet.CarGuid}"
+				);
+
+				return;
+			}
+
+			bool applied =
+				ChainCouplerInteraction_ScrewProtection_Patch
+					.ApplyApprovedClientUnscrew(
+						coupler
+					);
+
+			ModLog.Coupler(
+				$"HOST APPROVED UNSCREW " +
+				$"| CarGuid={packet.CarGuid} " +
+				$"| Side=" +
+				$"{(packet.IsFrontCoupler ? "FRONT" : "REAR")} " +
+				$"| HostForce=" +
+				$"{packet.ForceN / 1000f:F1} kN " +
+				$"| Applied={applied}"
+			);
 		}
 		
 		private void OnCouplerBreakReceived(ClientBoundPhysxCouplerBreakPacket packet)
@@ -1226,6 +1470,11 @@ namespace PhysxSimulationRework
 				ServerBoundPhysxTurntableStopPacket>(
 				OnClientTurntableStop
 			);
+			
+			server.RegisterPacket<
+				ServerBoundPhysxCouplerUnscrewRequestPacket>(
+				OnClientCouplerUnscrewRequest
+			);
 
             registered = true;
 
@@ -1340,6 +1589,82 @@ namespace PhysxSimulationRework
 				$"| Position={position} " +
 				$"| Angle={stoppedAngle:F2} " +
 				$"| Token={packet.EventToken}"
+			);
+		}
+		
+		private void OnClientCouplerUnscrewRequest(ServerBoundPhysxCouplerUnscrewRequestPacket packet,IPlayer sender)
+		{
+			if (packet == null ||
+				sender == null ||
+				string.IsNullOrEmpty(packet.RequestToken) ||
+				string.IsNullOrEmpty(packet.CarGuid))
+			{
+				return;
+			}
+
+			Coupler? coupler =
+				PSR_Multiplayer.FindNetworkCoupler(
+					packet.CarGuid,
+					packet.IsFrontCoupler
+				);
+
+			bool allowed = false;
+			float currentForce = 0f;
+
+
+			if (coupler != null)
+			{
+				allowed =
+					ChainCouplerInteraction_ScrewProtection_Patch
+						.HostOrLocalAllowsUnscrew(
+							coupler,
+							out currentForce
+						);
+			}
+			else
+			{
+				Main.Mod?.Logger.Warning(
+					$"[MP] Host could not find coupler " +
+					$"for unscrew request " +
+					$"| CarGuid={packet.CarGuid} " +
+					$"| Side=" +
+					$"{(packet.IsFrontCoupler ? "FRONT" : "REAR")}"
+				);
+			}
+
+			var response =
+				new ClientBoundPhysxCouplerUnscrewDecisionPacket
+				{
+					RequestToken =
+						packet.RequestToken,
+
+					CarGuid =
+						packet.CarGuid,
+
+					IsFrontCoupler =
+						packet.IsFrontCoupler,
+
+					Allowed =
+						allowed,
+
+					ForceN =
+						currentForce
+				};
+
+			server?.SendPacketToPlayer(
+				response,
+				sender,
+				reliable: true
+			);
+
+			ModLog.Coupler(
+				$"Host processed unscrew request " +
+				$"| CarGuid={packet.CarGuid} " +
+				$"| Side=" +
+				$"{(packet.IsFrontCoupler ? "FRONT" : "REAR")} " +
+				$"| Force={currentForce / 1000f:F1} kN " +
+				$"| Allowed={allowed} " +
+				$"| Token={packet.RequestToken}"
 			);
 		}
 

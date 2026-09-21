@@ -1729,6 +1729,232 @@ namespace PhysxSimulationRework
 			}
 		}
 	}
+	
+	// -------------------------------------------------
+	// BLOCK UNSCREWING OF TIGHT COUPLER UNDER LOAD
+	// -------------------------------------------------
+	[HarmonyPatch(typeof(ChainCouplerInteraction), "OnScrewButtonUsed")]
+	internal static class ChainCouplerInteraction_ScrewProtection_Patch
+	{
+		internal const float UNSCREW_BLOCK_FORCE = 400000f;
+		
+		private static bool networkApprovedUnscrew;
+
+		private static readonly MethodInfo? onScrewButtonUsedMethod = AccessTools.Method(typeof(ChainCouplerInteraction),"OnScrewButtonUsed");
+
+		[HarmonyPrefix]
+		private static bool Prefix( ChainCouplerInteraction __instance)
+		{
+			if (networkApprovedUnscrew)
+				return true;
+
+			if (__instance == null ||
+				__instance.couplerAdapter == null)
+			{
+				return true;
+			}
+			
+			if (__instance.CurrentState !=
+				ChainCouplerInteraction.State.Attached_Tight)
+			{
+				return true;
+			}
+			
+			Coupler coupler =
+				__instance.couplerAdapter.coupler;
+				
+			if (coupler == null ||
+				!coupler.IsCoupled())
+			{
+				return true;
+			}
+			
+			if (PSR_Multiplayer.IsClient)
+			{
+				PSR_Multiplayer
+					.RequestCouplerUnscrewAuthorization(
+						coupler
+					);
+					
+				return false;
+			}
+			
+			float currentForce;
+
+			return HostOrLocalAllowsUnscrew(
+				coupler,
+				out currentForce
+			);
+		}
+		
+		internal static bool HostOrLocalAllowsUnscrew(
+			Coupler coupler,
+			out float currentForce)
+		{
+			currentForce = 0f;
+
+
+			if (coupler == null ||
+				!coupler.IsCoupled())
+			{
+				return false;
+			}
+
+
+			ChainCouplerInteraction? chain =
+				coupler.ChainScript;
+				
+			if (chain == null ||
+				chain.CurrentState !=
+				ChainCouplerInteraction.State.Attached_Tight)
+			{
+				return false;
+			}
+
+
+			var settings = Main.Settings;
+			
+			if (settings == null ||
+				!settings.enableCouplerFailure)
+			{
+				return true;
+			}
+
+
+			ConfigurableJoint? joint =
+				ResolvePhysicalJoint(coupler);
+				
+			if (joint == null)
+			{
+				ModLog.Coupler(
+					$"Unscrew check: no physical joint found " +
+					$"| Car={coupler.train?.ID}"
+				);
+
+				return true;
+			}
+			
+			currentForce =
+				joint.currentForce.magnitude;
+
+
+			bool overloaded =
+				currentForce >=
+				UNSCREW_BLOCK_FORCE;
+
+
+			ModLog.Coupler(
+				$"Unscrew coupler check " +
+				$"| Car={coupler.train?.ID} " +
+				$"| Force={currentForce / 1000f:F1} N " +
+				$"| UnscrewLimit=" +
+				$"{UNSCREW_BLOCK_FORCE / 1000f:F1} N " +
+				$"| Authority=" +
+				$"{(PSR_Multiplayer.IsHost ? "HOST" : "LOCAL")}"
+			);
+			
+			if (!overloaded)
+			{
+				return true;
+			}
+			
+			joint.breakForce =
+				float.PositiveInfinity;
+
+			joint.breakTorque =
+				float.PositiveInfinity;
+				
+			ModLog.Coupler(
+				$"UNSCREW BLOCKED " +
+				$"| Car={coupler.train?.ID} " +
+				$"| Force={currentForce / 1000f:F1} N " +
+				$"| UnscrewLimit=" +
+				$"{UNSCREW_BLOCK_FORCE / 1000f:F1} N"
+			);
+			
+			return false;
+		}
+		
+		// =====================================================
+		// PHYSICAL JOINT RESOLUTION
+		// =====================================================
+		private static ConfigurableJoint?
+			ResolvePhysicalJoint(Coupler coupler)
+		{
+			if (coupler == null)
+				return null;
+			
+			if (coupler.rigidCJ != null)
+			{
+				return coupler.rigidCJ;
+			}
+			
+			if (coupler.coupledTo != null &&
+				coupler.coupledTo.rigidCJ != null)
+			{
+				return coupler.coupledTo.rigidCJ;
+			}
+			
+			return null;
+		}
+		
+		// =====================================================
+		// APPLY HOST-APPROVED CLIENT CLICK
+		// =====================================================
+		internal static bool ApplyApprovedClientUnscrew(
+			Coupler coupler)
+		{
+			if (coupler == null ||
+				!coupler.IsCoupled())
+			{
+				return false;
+			}
+			
+			ChainCouplerInteraction? chain =
+				coupler.ChainScript;
+				
+			if (chain == null ||
+				chain.CurrentState !=
+				ChainCouplerInteraction.State.Attached_Tight)
+			{
+				return false;
+			}
+			
+			if (onScrewButtonUsedMethod == null)
+			{
+				Main.Mod?.Logger.Error(
+					"[MP] OnScrewButtonUsed method not found."
+				);
+
+				return false;
+			}
+			
+			networkApprovedUnscrew = true;
+
+			try
+			{
+				onScrewButtonUsedMethod.Invoke(
+					chain,
+					null
+				);
+
+				return true;
+			}
+			catch (Exception ex)
+			{
+				Main.Mod?.Logger.Error(
+					$"[MP] Failed to apply approved " +
+					$"coupler unscrew: {ex}"
+				);
+
+				return false;
+			}
+			finally
+			{
+				networkApprovedUnscrew = false;
+			}
+		}
+	}
 
 	[HarmonyPatch(typeof(DrivingForce), "FixedUpdate")]
 	public static class DrivingForce_StressTrigger_Patch
